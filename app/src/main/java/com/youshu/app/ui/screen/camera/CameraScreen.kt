@@ -383,7 +383,7 @@ fun CameraScreen(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(Color(0xFFFFC44A))
+                            .background(PurpleStart)
                             .clickable {
                                 onPhotoTaken(capturedUris.toList())
                             }
@@ -391,7 +391,7 @@ fun CameraScreen(
                     ) {
                         Text(
                             text = "下一步",
-                            color = Color.Black,
+                            color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                         )
@@ -425,7 +425,7 @@ fun CameraScreen(
                                 .size(width = 24.dp, height = 3.dp)
                                 .clip(RoundedCornerShape(999.dp))
                                 .background(
-                                    if (selectedTab == tab) Color(0xFFFFC44A) else Color.Transparent
+                                    if (selectedTab == tab) PurpleStart else Color.Transparent
                                 )
                         )
                     }
