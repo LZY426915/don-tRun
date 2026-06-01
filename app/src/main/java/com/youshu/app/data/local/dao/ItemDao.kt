@@ -1,0 +1,382 @@
+package com.youshu.app.data.local.dao
+
+import androidx.room.Dao
+import androidx.room.Delete
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Update
+import com.youshu.app.data.local.entity.Item
+import com.youshu.app.data.local.entity.ItemDetail
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface ItemDao {
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun getActiveItems(): Flow<List<ItemDetail>>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.deletedAt IS NULL
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun getAllItems(): Flow<List<ItemDetail>>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.id = :id
+          AND items.deletedAt IS NULL
+        """
+    )
+    fun getItemDetailById(id: Long): Flow<ItemDetail?>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND items.expireTime IS NOT NULL
+          AND items.expireTime <= :thresholdTime
+          AND items.expireTime > 0
+        ORDER BY items.expireTime ASC
+        """
+    )
+    fun getExpiringItems(thresholdTime: Long): Flow<List<ItemDetail>>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND (
+              items.name LIKE '%' || :query || '%'
+              OR categories.name LIKE '%' || :query || '%'
+              OR location_paths.path LIKE '%' || :query || '%'
+              OR items.note LIKE '%' || :query || '%'
+          )
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun searchItems(query: String): Flow<List<ItemDetail>>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND items.categoryId = :categoryId
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun getItemsByCategory(categoryId: Long): Flow<List<ItemDetail>>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND items.locationId = :locationId
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun getItemsByLocation(locationId: Long): Flow<List<ItemDetail>>
+
+    @Query("SELECT * FROM items WHERE id = :id AND deletedAt IS NULL")
+    suspend fun getItemById(id: Long): Item?
+
+    @Query("SELECT * FROM items ORDER BY id ASC")
+    suspend fun getAllItemsSnapshot(): List<Item>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: Item): Long
+
+    @Update
+    suspend fun update(item: Item)
+
+    @Delete
+    suspend fun delete(item: Item)
+
+    @Query("UPDATE items SET deletedAt = :deletedAt WHERE id = :id")
+    suspend fun moveToTrash(id: Long, deletedAt: Long)
+
+    @Query("UPDATE items SET deletedAt = NULL WHERE id = :id")
+    suspend fun restoreFromTrash(id: Long)
+
+    @Query("UPDATE items SET deletedAt = NULL WHERE id IN (:ids)")
+    suspend fun restoreItemsFromTrash(ids: List<Long>)
+
+    @Query("UPDATE items SET status = :status WHERE id = :id")
+    suspend fun updateStatus(id: Long, status: Int)
+
+    @Query(
+        """
+        UPDATE items
+        SET status = :status,
+            rating = :rating,
+            ratedAt = :ratedAt,
+            reviewNote = :reviewNote
+        WHERE id = :id
+        """
+    )
+    suspend fun updateStatusAndRating(id: Long, status: Int, rating: Int?, ratedAt: Long?, reviewNote: String)
+
+    @Query("UPDATE items SET rating = :rating, ratedAt = :ratedAt, reviewNote = :reviewNote WHERE id = :id")
+    suspend fun updateRating(id: Long, rating: Int, ratedAt: Long, reviewNote: String)
+
+    @Query(
+        """
+        SELECT * FROM items
+        WHERE status = 0
+          AND deletedAt IS NULL
+          AND expireTime IS NOT NULL
+          AND expireTime > 0
+        """
+    )
+    suspend fun getActiveItemsSync(): List<Item>
+
+    @Query("SELECT COUNT(*) FROM items WHERE status = 0 AND deletedAt IS NULL")
+    fun getActiveCount(): Flow<Int>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM items
+        WHERE status = 0
+          AND deletedAt IS NULL
+          AND expireTime IS NOT NULL
+          AND expireTime <= :thresholdTime
+          AND expireTime > 0
+        """
+    )
+    fun getExpiringCount(thresholdTime: Long): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM items WHERE deletedAt IS NULL")
+    fun getTotalCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM items WHERE status = 1 AND deletedAt IS NULL")
+    fun getUsedUpCount(): Flow<Int>
+
+    @Query("SELECT COALESCE(SUM(price * quantity), 0.0) FROM items WHERE status = 0 AND deletedAt IS NULL")
+    fun getTotalValue(): Flow<Double>
+
+    @Query("SELECT COUNT(*) FROM items WHERE status = 0 AND deletedAt IS NULL AND categoryId = :categoryId")
+    fun getCountByCategory(categoryId: Long): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM items WHERE status = 0 AND deletedAt IS NULL AND locationId = :locationId")
+    fun getCountByLocation(locationId: Long): Flow<Int>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.deletedAt IS NOT NULL
+          AND items.deletedAt >= :cutoffTime
+        ORDER BY items.deletedAt DESC
+        """
+    )
+    fun getRecycleItems(cutoffTime: Long): Flow<List<ItemDetail>>
+
+    @Query("SELECT COUNT(*) FROM items WHERE deletedAt IS NOT NULL AND deletedAt >= :cutoffTime")
+    fun getRecycleCount(cutoffTime: Long): Flow<Int>
+
+    @Query("SELECT * FROM items WHERE deletedAt IS NOT NULL AND deletedAt < :cutoffTime")
+    suspend fun getDeletedItemsBefore(cutoffTime: Long): List<Item>
+
+    @Query("SELECT * FROM items WHERE id IN (:ids) AND deletedAt IS NOT NULL")
+    suspend fun getDeletedItemsByIds(ids: List<Long>): List<Item>
+
+    @Query("DELETE FROM items WHERE deletedAt IS NOT NULL AND deletedAt < :cutoffTime")
+    suspend fun purgeDeletedBefore(cutoffTime: Long)
+
+    @Query("DELETE FROM items WHERE id IN (:ids) AND deletedAt IS NOT NULL")
+    suspend fun deleteDeletedItemsByIds(ids: List<Long>)
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        ),
+        subtree_locations AS (
+            -- 根：名称匹配的节点
+            SELECT id FROM locations WHERE name = :locationName
+            UNION
+            -- 子节点：parentId 在已收集集合中
+            SELECT child.id
+            FROM locations AS child
+            INNER JOIN subtree_locations ON child.parentId = subtree_locations.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND items.locationId IN (SELECT id FROM subtree_locations)
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun getItemsByLocationName(locationName: String): Flow<List<ItemDetail>>
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND categories.name = :categoryName
+        ORDER BY items.createdAt DESC
+        """
+    )
+    fun getItemsByCategoryName(categoryName: String): Flow<List<ItemDetail>>
+
+    @Query("DELETE FROM items")
+    suspend fun deleteAll()
+
+    @Query(
+        """
+        WITH RECURSIVE location_paths(id, path) AS (
+            SELECT id, name FROM locations WHERE parentId IS NULL
+            UNION ALL
+            SELECT child.id, location_paths.path || ' / ' || child.name
+            FROM locations AS child
+            INNER JOIN location_paths ON child.parentId = location_paths.id
+        )
+        SELECT items.*,
+               categories.name AS categoryName,
+               location_paths.path AS locationName
+        FROM items
+        LEFT JOIN categories ON items.categoryId = categories.id
+        LEFT JOIN location_paths ON items.locationId = location_paths.id
+        WHERE items.status = 0
+          AND items.deletedAt IS NULL
+          AND items.expireTime IS NOT NULL
+          AND items.expireTime <= :thresholdTime
+          AND items.expireTime > 0
+          AND items.expireTime > :currentTime
+        ORDER BY items.expireTime ASC
+        """
+    )
+    fun getExpiringItemsInRange(currentTime: Long, thresholdTime: Long): Flow<List<ItemDetail>>
+}

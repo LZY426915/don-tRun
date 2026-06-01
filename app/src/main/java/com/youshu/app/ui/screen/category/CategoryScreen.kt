@@ -1,0 +1,807 @@
+package com.youshu.app.ui.screen.category
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Backpack
+import androidx.compose.material.icons.filled.Checkroom
+import androidx.compose.material.icons.filled.ChildCare
+import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Fastfood
+import androidx.compose.material.icons.filled.Handyman
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Kitchen
+import androidx.compose.material.icons.filled.LocalCafe
+import androidx.compose.material.icons.filled.LocalLaundryService
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MedicalServices
+import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.Pets
+import androidx.compose.material.icons.filled.Power
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.ShoppingBasket
+import androidx.compose.material.icons.filled.Spa
+import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.material.icons.filled.Toys
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WineBar
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Velocity
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.youshu.app.data.local.entity.Category
+import com.youshu.app.data.local.entity.Item
+import com.youshu.app.data.local.entity.Location
+import com.youshu.app.ui.components.AppDecorativeBackground
+import com.youshu.app.ui.components.AppDialog
+import com.youshu.app.ui.components.AppSurfaceCard
+import com.youshu.app.ui.components.EmptyState
+import com.youshu.app.ui.components.ItemCard
+import com.youshu.app.ui.components.SectionHeader
+import com.youshu.app.ui.components.SwipeActionSpec
+import com.youshu.app.ui.components.SwipeRevealItem
+import com.youshu.app.ui.theme.PurpleStart
+import com.youshu.app.ui.theme.StatusExpired
+import com.youshu.app.ui.theme.TextHint
+import com.youshu.app.ui.theme.TextPrimary
+import com.youshu.app.ui.theme.TextSecondary
+import com.youshu.app.ui.viewmodel.CategoryViewModel
+
+private data class CategoryIconOption(
+    val key: String,
+    val label: String,
+    val icon: ImageVector
+)
+
+private val categoryIconOptions = listOf(
+    CategoryIconOption("food", "食品", Icons.Default.Fastfood),
+    CategoryIconOption("medicine", "药品", Icons.Default.MedicalServices),
+    CategoryIconOption("home", "家居", Icons.Default.Home),
+    CategoryIconOption("digital", "数码", Icons.Default.Devices),
+    CategoryIconOption("clothes", "衣物", Icons.Default.Checkroom),
+    CategoryIconOption("stationery", "文具", Icons.AutoMirrored.Filled.StickyNote2),
+    CategoryIconOption("tool", "工具", Icons.Default.Handyman),
+    CategoryIconOption("kitchen", "厨具", Icons.Default.Kitchen),
+    CategoryIconOption("coffee", "饮品", Icons.Default.LocalCafe),
+    CategoryIconOption("laundry", "洗护", Icons.Default.LocalLaundryService),
+    CategoryIconOption("cleaning", "清洁", Icons.Default.CleaningServices),
+    CategoryIconOption("pet", "宠物", Icons.Default.Pets),
+    CategoryIconOption("child", "母婴", Icons.Default.ChildCare),
+    CategoryIconOption("game", "娱乐", Icons.Default.SportsEsports),
+    CategoryIconOption("bag", "收纳", Icons.Default.Backpack),
+    CategoryIconOption("care", "个护", Icons.Default.SelfImprovement),
+    CategoryIconOption("basket", "囤货", Icons.Default.ShoppingBasket),
+    CategoryIconOption("drink", "酒水", Icons.Default.WineBar),
+    CategoryIconOption("snack", "零食", Icons.Default.Restaurant),
+    CategoryIconOption("bath", "洗浴", Icons.Default.WaterDrop),
+    CategoryIconOption("health", "保健", Icons.Default.MonitorHeart),
+    CategoryIconOption("safe", "防护", Icons.Default.Shield),
+    CategoryIconOption("toy", "玩具", Icons.Default.Toys),
+    CategoryIconOption("beauty", "美护", Icons.Default.Spa),
+    CategoryIconOption("battery", "电池", Icons.Default.Power),
+    CategoryIconOption("other", "其它", Icons.Default.Apps)
+)
+
+private val consumeChildScrollConnection = object : NestedScrollConnection {
+    override fun onPostScroll(
+        consumed: Offset,
+        available: Offset,
+        source: NestedScrollSource
+    ): Offset {
+        return available
+    }
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+        return available
+    }
+}
+
+@Composable
+fun CategoryScreen(
+    onNavigateToDetail: (Long) -> Unit,
+    onNavigateToEdit: (Long) -> Unit,
+    viewModel: CategoryViewModel = hiltViewModel()
+) {
+    val categories by viewModel.categories.collectAsState()
+    val allLocations by viewModel.allLocations.collectAsState()
+    val rootLocations by viewModel.rootLocations.collectAsState()
+    val filteredItems by viewModel.filteredItems.collectAsState()
+    val activeItems by viewModel.activeItems.collectAsState()
+    val selectedCategoryId by viewModel.selectedCategoryId.collectAsState()
+    val selectedLocationId by viewModel.selectedLocationId.collectAsState()
+
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val expandedLocations = remember { mutableStateMapOf<Long, Boolean>() }
+    var showCategoryDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var openedItemId by remember { mutableStateOf<Long?>(null) }
+    var pendingDeleteItem by remember { mutableStateOf<Item?>(null) }
+    var inputName by remember { mutableStateOf("") }
+    var isEditingCategory by remember { mutableStateOf(false) }
+
+    val locationDescendants = remember(allLocations) { buildLocationDescendants(allLocations) }
+    val categoryCounts = remember(categories, activeItems) {
+        categories.associate { category ->
+            category.id to activeItems.count { it.item.categoryId == category.id }
+        }
+    }
+    val locationCounts = remember(allLocations, activeItems, locationDescendants) {
+        allLocations.associate { location ->
+            val ids = locationDescendants[location.id].orEmpty()
+            location.id to activeItems.count { detail -> detail.item.locationId in ids }
+        }
+    }
+
+    val selectedLocation = allLocations.firstOrNull { it.id == selectedLocationId }
+    val selectedCategory = categories.firstOrNull { it.id == selectedCategoryId }
+    val selectedLabel = when (selectedTab) {
+        0 -> selectedCategory?.name ?: "全部分类"
+        else -> selectedLocation?.name ?: "全部位置"
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(indication = null, interactionSource = null) {
+                openedItemId = null
+            }
+    ) {
+        AppDecorativeBackground()
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(top = 12.dp, bottom = 102.dp)
+        ) {
+            Text(
+                text = "分类",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            Text(
+                text = "按物品分类或按存放位置快速定位，也支持直接管理。",
+                fontSize = 13.sp,
+                color = TextSecondary,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+            )
+
+            SegmentedTabs(
+                selectedTab = selectedTab,
+                onSelectTab = { index ->
+                    selectedTab = index
+                    if (index == 0) {
+                        viewModel.selectCategory(null)
+                    } else {
+                        viewModel.selectLocation(null)
+                    }
+                },
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (selectedTab == 0) "管理分类" else "管理位置",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniActionButton(
+                    icon = if (selectedTab == 0 && selectedCategoryId != null) Icons.Default.Edit else Icons.Default.Add,
+                    contentDescription = if (selectedTab == 0 && selectedCategoryId != null) "编辑" else "新增",
+                    onClick = {
+                        if (selectedTab == 0 && selectedCategory != null) {
+                            inputName = selectedCategory.name
+                            isEditingCategory = true
+                        } else {
+                            inputName = ""
+                            isEditingCategory = false
+                        }
+                        showCategoryDialog = true
+                    }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                MiniActionButton(
+                    icon = Icons.Default.DeleteOutline,
+                    contentDescription = "删除",
+                    enabled = if (selectedTab == 0) {
+                        selectedCategoryId != null
+                    } else {
+                        selectedLocationId != null
+                    },
+                    tint = StatusExpired,
+                    onClick = { showDeleteDialog = true }
+                )
+            }
+
+            AppSurfaceCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .height(300.dp),
+                shadowElevation = 12.dp
+            ) {
+                when (selectedTab) {
+                    0 -> CategoryPanel(
+                        categories = categories,
+                        selectedCategoryId = selectedCategoryId,
+                        counts = categoryCounts,
+                        onSelectCategory = viewModel::selectCategory
+                    )
+
+                    else -> LocationPanel(
+                        rootLocations = rootLocations,
+                        selectedLocationId = selectedLocationId,
+                        expandedLocations = expandedLocations,
+                        counts = locationCounts,
+                        onSelectLocation = viewModel::selectLocation,
+                        onToggleExpand = { id ->
+                            expandedLocations[id] = !(expandedLocations[id] ?: false)
+                        },
+                        viewModel = viewModel
+                    )
+                }
+            }
+
+            AppSurfaceCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .heightIn(min = 360.dp),
+                shadowElevation = 12.dp,
+                contentPadding = PaddingValues(16.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    SectionHeader(
+                        title = selectedLabel,
+                        subtitle = "共 ${filteredItems.size} 件物品",
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
+
+                    when {
+                        (selectedTab == 0 && selectedCategoryId == null) || (selectedTab == 1 && selectedLocationId == null) -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(280.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                EmptyState(
+                                    title = "先选择一个分组",
+                                    message = if (selectedTab == 0) {
+                                        "选择分类后，这里会显示该分类下的全部物品。"
+                                    } else {
+                                        "选择位置后，这里会显示该位置及子位置中的物品。"
+                                    }
+                                )
+                            }
+                        }
+
+                        filteredItems.isEmpty() -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(280.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                EmptyState(
+                                    title = "这里还是空的",
+                                    message = "当前分组下还没有录入物品。"
+                                )
+                            }
+                        }
+
+                        else -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                filteredItems.forEach { itemDetail ->
+                                    SwipeRevealItem(
+                                        itemKey = itemDetail.item.id,
+                                        openedItemKey = openedItemId,
+                                        onOpenedItemChange = { openedItemId = it as Long? },
+                                        actions = if (itemDetail.item.status == Item.STATUS_USED_UP) {
+                                            listOf(
+                                                SwipeActionSpec(
+                                                    label = "删除",
+                                                    icon = Icons.Default.DeleteOutline,
+                                                    backgroundColor = StatusExpired,
+                                                    onClick = { pendingDeleteItem = itemDetail.item }
+                                                )
+                                            )
+                                        } else {
+                                            listOf(
+                                                SwipeActionSpec(
+                                                    label = "编辑",
+                                                    icon = Icons.Default.Edit,
+                                                    backgroundColor = Color(0xFF5C7CFA),
+                                                    onClick = { onNavigateToEdit(itemDetail.item.id) }
+                                                ),
+                                                SwipeActionSpec(
+                                                    label = "用完",
+                                                    icon = Icons.Default.TaskAlt,
+                                                    backgroundColor = PurpleStart,
+                                                    onClick = { viewModel.markAsUsed(itemDetail.item.id) }
+                                                ),
+                                                SwipeActionSpec(
+                                                    label = "删除",
+                                                    icon = Icons.Default.DeleteOutline,
+                                                    backgroundColor = StatusExpired,
+                                                    onClick = { pendingDeleteItem = itemDetail.item }
+                                                )
+                                            )
+                                        }
+                                    ) { closeActions, _ ->
+                                        ItemCard(
+                                            itemDetail = itemDetail,
+                                            onClick = {
+                                                closeActions()
+                                                onNavigateToDetail(itemDetail.item.id)
+                                            }
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCategoryDialog) {
+        if (selectedTab == 0) {
+            CategoryEditorDialog(
+                title = if (isEditingCategory) "编辑分类" else "新增分类",
+                inputName = inputName,
+                onNameChange = { inputName = it },
+                onDismissRequest = { showCategoryDialog = false },
+                onConfirm = {
+                    if (isEditingCategory) {
+                        viewModel.updateCategory(selectedCategoryId, inputName, "")
+                    } else {
+                        viewModel.addCategory(inputName, "")
+                    }
+                    showCategoryDialog = false
+                }
+            )
+        } else {
+            AppDialog(
+                title = "新增位置",
+                subtitle = selectedLocation?.let { "新位置会添加到「${it.name}」下一级。" }
+                    ?: "未选中位置时，新位置会添加到最外层。",
+                onDismissRequest = { showCategoryDialog = false },
+                confirmText = "添加",
+                confirmEnabled = inputName.isNotBlank(),
+                onConfirm = {
+                    val parentId = selectedLocationId
+                    viewModel.addLocation(inputName, parentId = parentId)
+                    parentId?.let { expandedLocations[it] = true }
+                    showCategoryDialog = false
+                }
+            ) {
+                OutlinedTextField(
+                    value = inputName,
+                    onValueChange = { inputName = it },
+                    singleLine = true,
+                    label = { Text("位置名称") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+
+    if (showDeleteDialog) {
+        val deleteName = if (selectedTab == 0) selectedCategory?.name else selectedLocation?.name
+        AppDialog(
+            title = if (selectedTab == 0) "删除分类" else "删除位置",
+            subtitle = "相关物品会保留，但关联关系可能会被清空。",
+            onDismissRequest = { showDeleteDialog = false },
+            confirmText = "删除",
+            destructiveConfirm = true,
+            onConfirm = {
+                if (selectedTab == 0) {
+                    viewModel.deleteCategory(selectedCategoryId)
+                } else {
+                    viewModel.deleteLocation(selectedLocationId)
+                }
+                showDeleteDialog = false
+            }
+        ) {
+            Text(
+                text = "确定要删除“${deleteName.orEmpty()}”吗？",
+                fontSize = 14.sp,
+                color = TextSecondary
+            )
+        }
+    }
+
+    pendingDeleteItem?.let { item ->
+        AppDialog(
+            title = "确认删除",
+            subtitle = "删除后会先移入回收站，30 天内仍可恢复。",
+            onDismissRequest = { pendingDeleteItem = null },
+            confirmText = "移入回收站",
+            destructiveConfirm = true,
+            onConfirm = {
+                viewModel.moveToTrash(item)
+                pendingDeleteItem = null
+            }
+        ) {
+            Text(
+                text = "确定要删除「${item.name}」吗？",
+                fontSize = 14.sp,
+                color = TextSecondary
+            )
+        }
+    }
+}
+
+@Composable
+private fun CategoryEditorDialog(
+    title: String,
+    inputName: String,
+    onNameChange: (String) -> Unit,
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AppDialog(
+        title = title,
+        subtitle = "输入分类名称即可。",
+        onDismissRequest = onDismissRequest,
+        confirmText = "保存",
+        confirmEnabled = inputName.isNotBlank(),
+        onConfirm = onConfirm
+    ) {
+        OutlinedTextField(
+            value = inputName,
+            onValueChange = onNameChange,
+            singleLine = true,
+            label = { Text("分类名称") },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun SegmentedTabs(
+    selectedTab: Int,
+    onSelectTab: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color(0xFFF2EFF7))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        SegmentItem(
+            text = "按物品分类",
+            selected = selectedTab == 0,
+            modifier = Modifier.weight(1f),
+            onClick = { onSelectTab(0) }
+        )
+        SegmentItem(
+            text = "按存放位置",
+            selected = selectedTab == 1,
+            modifier = Modifier.weight(1f),
+            onClick = { onSelectTab(1) }
+        )
+    }
+}
+
+@Composable
+private fun SegmentItem(
+    text: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) Color.White else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) PurpleStart else TextHint
+        )
+    }
+}
+
+@Composable
+private fun MiniActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    enabled: Boolean = true,
+    tint: Color = PurpleStart,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (enabled) Color.White else Color(0xFFF4F1F8))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (enabled) tint else TextHint,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+@Composable
+private fun CategoryPanel(
+    categories: List<Category>,
+    selectedCategoryId: Long?,
+    counts: Map<Long, Int>,
+    onSelectCategory: (Long?) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.nestedScroll(consumeChildScrollConnection),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(categories, key = { it.id }) { category ->
+            CategoryRow(
+                category = category,
+                count = counts[category.id] ?: 0,
+                selected = selectedCategoryId == category.id,
+                onClick = { onSelectCategory(category.id) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CategoryRow(
+    category: Category,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val icon = categoryIconOptions.firstOrNull { it.key == category.icon }?.icon ?: Icons.Default.Apps
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) PurpleStart.copy(alpha = 0.1f) else Color(0xFFFAF8FE))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (selected) Color.White else Color(0xFFF1F5FF)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = PurpleStart
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = category.name,
+            modifier = Modifier.weight(1f),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimary
+        )
+        Text(
+            text = "${count}件",
+            fontSize = 13.sp,
+            color = if (selected) PurpleStart else TextSecondary
+        )
+    }
+}
+
+@Composable
+private fun LocationPanel(
+    rootLocations: List<Location>,
+    selectedLocationId: Long?,
+    expandedLocations: Map<Long, Boolean>,
+    counts: Map<Long, Int>,
+    onSelectLocation: (Long?) -> Unit,
+    onToggleExpand: (Long) -> Unit,
+    viewModel: CategoryViewModel
+) {
+    LazyColumn(
+        modifier = Modifier.nestedScroll(consumeChildScrollConnection),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        items(rootLocations, key = { it.id }) { location ->
+            LocationNode(
+                location = location,
+                selectedLocationId = selectedLocationId,
+                expandedLocations = expandedLocations,
+                counts = counts,
+                onSelectLocation = onSelectLocation,
+                onToggleExpand = onToggleExpand,
+                viewModel = viewModel,
+                depth = 0
+            )
+        }
+    }
+}
+
+@Composable
+private fun LocationNode(
+    location: Location,
+    selectedLocationId: Long?,
+    expandedLocations: Map<Long, Boolean>,
+    counts: Map<Long, Int>,
+    onSelectLocation: (Long?) -> Unit,
+    onToggleExpand: (Long) -> Unit,
+    viewModel: CategoryViewModel,
+    depth: Int
+) {
+    val subLocations by viewModel.getSubLocations(location.id).collectAsState(initial = emptyList())
+    val isExpanded = expandedLocations[location.id] ?: false
+    val hasChildren = subLocations.isNotEmpty()
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = (depth * 16).dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(
+                    if (selectedLocationId == location.id) PurpleStart.copy(alpha = 0.1f)
+                    else Color.Transparent
+                )
+                .clickable {
+                    onSelectLocation(location.id)
+                }
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (depth == 0) Icons.Default.Home else Icons.Default.LocationOn,
+                contentDescription = null,
+                tint = if (selectedLocationId == location.id) PurpleStart else TextHint,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = location.name,
+                modifier = Modifier.weight(1f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Text(
+                text = "${counts[location.id] ?: 0}件",
+                fontSize = 12.sp,
+                color = TextSecondary
+            )
+            if (hasChildren) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "收起" else "展开",
+                    tint = TextHint,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable { onToggleExpand(location.id) }
+                        .padding(4.dp)
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isExpanded && hasChildren,
+            enter = expandVertically(),
+            exit = shrinkVertically()
+        ) {
+            Column {
+                subLocations.forEach { subLocation ->
+                    LocationNode(
+                        location = subLocation,
+                        selectedLocationId = selectedLocationId,
+                        expandedLocations = expandedLocations,
+                        counts = counts,
+                        onSelectLocation = onSelectLocation,
+                        onToggleExpand = onToggleExpand,
+                        viewModel = viewModel,
+                        depth = depth + 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun buildLocationDescendants(locations: List<Location>): Map<Long, Set<Long>> {
+    val childrenMap = locations.groupBy { it.parentId }
+
+    fun collectIds(locationId: Long): Set<Long> {
+        val childIds = childrenMap[locationId].orEmpty().flatMap { collectIds(it.id) }
+        return setOf(locationId) + childIds
+    }
+
+    return locations.associate { it.id to collectIds(it.id) }
+}

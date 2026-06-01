@@ -1,0 +1,46 @@
+package com.youshu.app.ui.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.youshu.app.data.local.entity.Item
+import com.youshu.app.data.local.entity.ItemDetail
+import com.youshu.app.data.repository.ItemRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class DetailViewModel @Inject constructor(
+    private val itemRepository: ItemRepository
+) : ViewModel() {
+
+    val items: StateFlow<List<ItemDetail>> = itemRepository.getAllItems()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun markAsUsed(id: Long, rating: Int? = null, reviewNote: String? = null) {
+        viewModelScope.launch {
+            itemRepository.markAsUsed(id, rating, reviewNote)
+        }
+    }
+
+    fun rateUsedItem(id: Long, rating: Int, reviewNote: String? = null) {
+        viewModelScope.launch {
+            itemRepository.rateUsedItem(id, rating, reviewNote)
+        }
+    }
+
+    fun markAsDiscarded(id: Long) {
+        viewModelScope.launch {
+            itemRepository.markAsDiscarded(id)
+        }
+    }
+
+    fun delete(item: Item) {
+        viewModelScope.launch {
+            itemRepository.moveToTrash(item)
+        }
+    }
+}

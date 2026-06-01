@@ -1,0 +1,323 @@
+package com.youshu.app.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import com.youshu.app.ui.theme.Background
+import com.youshu.app.ui.theme.CardWhite
+import com.youshu.app.ui.theme.DividerSoft
+import com.youshu.app.ui.theme.PurpleGlow
+import com.youshu.app.ui.theme.PurpleLight
+import com.youshu.app.ui.theme.PurpleStart
+import com.youshu.app.ui.theme.TextPrimary
+import com.youshu.app.ui.theme.TextSecondary
+
+fun appGlassStyle(blurAlpha: Float = 0.55f): HazeStyle {
+    val strength = blurAlpha.coerceIn(0f, 1f)
+    return HazeStyle(
+        backgroundColor = Color.Transparent,
+        tints = listOf(
+            HazeTint(Color.White.copy(alpha = 0.08f + (0.05f * strength))),
+            HazeTint(Color(0xFFFFF5E8).copy(alpha = 0.03f + (0.03f * strength)))
+        ),
+        blurRadius = (18 + (8 * strength)).dp,
+        noiseFactor = 0f,
+        fallbackTint = HazeTint(Color.White.copy(alpha = 0.56f + (0.12f * strength)))
+    )
+}
+
+@Composable
+fun AppDecorativeBackground(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color(0xFFFFFBF4), Background)
+                )
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .size(260.dp)
+                .offset(x = (-70).dp, y = (-50).dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(PurpleGlow.copy(alpha = 0.38f), Color.Transparent)
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .size(320.dp)
+                .align(Alignment.TopEnd)
+                .offset(x = 72.dp, y = (-76).dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(PurpleLight.copy(alpha = 0.9f), Color.Transparent)
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .size(220.dp)
+                .align(Alignment.BottomEnd)
+                .offset(x = 56.dp, y = 48.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(Color(0xFFFFF1D6), Color.Transparent)
+                    )
+                )
+        )
+    }
+}
+
+@Composable
+fun AppSurfaceCard(
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(28.dp),
+    contentPadding: PaddingValues = PaddingValues(20.dp),
+    containerColor: Color = CardWhite.copy(alpha = 0.96f),
+    shadowElevation: Dp = 18.dp,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val cardModifier = modifier.shadow(
+        elevation = shadowElevation,
+        shape = shape,
+        ambientColor = PurpleStart.copy(alpha = 0.08f),
+        spotColor = Color.Black.copy(alpha = 0.08f)
+    )
+    val colors = CardDefaults.cardColors(containerColor = containerColor)
+    val elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+
+    if (onClick == null) {
+        Card(
+            modifier = cardModifier,
+            shape = shape,
+            colors = colors,
+            elevation = elevation
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(contentPadding),
+                content = content
+            )
+        }
+    } else {
+        Card(
+            onClick = onClick,
+            modifier = cardModifier,
+            enabled = enabled,
+            shape = shape,
+            colors = colors,
+            elevation = elevation,
+            interactionSource = remember { MutableInteractionSource() }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(contentPadding),
+                content = content
+            )
+        }
+    }
+}
+
+@Composable
+fun GlassPanel(
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
+    shape: Shape = RoundedCornerShape(28.dp),
+    contentPadding: PaddingValues = PaddingValues(20.dp),
+    containerColor: Color = Color.White.copy(alpha = 0.18f),
+    borderColor: Color = Color.White.copy(alpha = 0.8f),
+    shadowElevation: Dp = 12.dp,
+    blurAlpha: Float = 0.55f,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val glassBackground = containerColor.copy(alpha = 0.015f + (blurAlpha.coerceIn(0f, 1f) * 0.01f))
+    val glassStyle = appGlassStyle(blurAlpha = blurAlpha)
+    Box(
+        modifier = modifier
+            .shadow(
+                elevation = shadowElevation,
+                shape = shape,
+                ambientColor = PurpleStart.copy(alpha = 0.08f),
+                spotColor = Color.Black.copy(alpha = 0.08f)
+            )
+            .clip(shape)
+            .then(
+                if (hazeState == null) {
+                    Modifier.background(glassBackground)
+                } else {
+                    Modifier.hazeEffect(
+                        state = hazeState,
+                        style = glassStyle
+                    )
+                }
+            )
+            .border(
+                width = 1.dp,
+                color = borderColor,
+                shape = shape
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(contentPadding),
+            content = content
+        )
+    }
+}
+
+@Composable
+fun SectionHeader(
+    title: String,
+    subtitle: String? = null,
+    action: String? = null,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            subtitle?.let {
+                Text(
+                    text = it,
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+        action?.let {
+            Text(
+                text = it,
+                color = PurpleStart,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+fun PillTag(
+    text: String,
+    modifier: Modifier = Modifier,
+    backgroundColor: Color,
+    contentColor: Color,
+    onClick: (() -> Unit)? = null
+) {
+    val shape = RoundedCornerShape(999.dp)
+    val baseModifier = modifier
+        .clip(shape)
+        .background(backgroundColor)
+
+    Box(
+        modifier = if (onClick == null) {
+            baseModifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        } else {
+            baseModifier
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick
+                )
+                .padding(horizontal = 8.dp, vertical = 3.dp)
+        }
+    ) {
+        Text(
+            text = text,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            color = contentColor
+        )
+    }
+}
+
+@Composable
+fun StatTile(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    accent: Color = PurpleStart
+) {
+    AppSurfaceCard(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+        shadowElevation = 14.dp
+    ) {
+        Text(
+            text = value,
+            color = accent,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = label,
+            color = TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+@Composable
+fun DividerLine(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(DividerSoft)
+    )
+}
