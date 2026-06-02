@@ -1,7 +1,12 @@
 package com.youshu.app.ui.screen.agent
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
@@ -11,6 +16,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,13 +25,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -57,6 +65,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -73,6 +82,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -111,6 +121,7 @@ fun AgentChatScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val viewModel: com.youshu.app.ui.viewmodel.AgentChatViewModel = hiltViewModel()
 
     val conversations by viewModel.conversations.collectAsState()
@@ -119,9 +130,29 @@ fun AgentChatScreen(
     val historyVisible by viewModel.historyVisible.collectAsState()
     val searchKeyword by viewModel.searchKeyword.collectAsState()
 
+    val activity = remember(context) { context.findActivity() }
     var input by rememberSaveable { mutableStateOf("") }
     var attachmentsExpanded by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    var compensatedKeyboardOffsetPx by remember { mutableStateOf(0f) }
+    val keyboardOffset by animateDpAsState(
+        targetValue = with(density) { WindowInsets.ime.getBottom(density).toDp() },
+        label = "agentKeyboardOffset"
+    )
+
+    DisposableEffect(activity) {
+        val window = activity?.window
+        val originalSoftInputMode = window?.attributes?.softInputMode
+        if (window != null && originalSoftInputMode != null) {
+            val withoutAdjust = originalSoftInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST.inv()
+            window.setSoftInputMode(withoutAdjust or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
+        onDispose {
+            if (window != null && originalSoftInputMode != null) {
+                window.setSoftInputMode(originalSoftInputMode)
+            }
+        }
+    }
 
     val messages = activeConversation?.messages.orEmpty()
     val displayMessages = if (isReplying) {
@@ -156,6 +187,16 @@ fun AgentChatScreen(
         }
     }
 
+    LaunchedEffect(keyboardOffset) {
+        val keyboardOffsetPx = with(density) { keyboardOffset.toPx() }
+        val delta = keyboardOffsetPx - compensatedKeyboardOffsetPx
+        val isAtTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        if (delta != 0f && !isAtTop) {
+            listState.scrollBy(delta)
+        }
+        compensatedKeyboardOffsetPx = keyboardOffsetPx
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AppDecorativeBackground()
 
@@ -163,6 +204,7 @@ fun AgentChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .offset(y = -keyboardOffset)
         ) {
             AgentTopBar(
                 onBack = onBack,
@@ -183,7 +225,7 @@ fun AgentChatScreen(
                 contentPadding = PaddingValues(
                     start = 18.dp,
                     end = 18.dp,
-                    top = 24.dp,
+                    top = 24.dp + keyboardOffset,
                     bottom = 20.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -590,7 +632,6 @@ private fun AgentInputBar(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .imePadding()
             .background(Color.Transparent)
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
@@ -624,7 +665,8 @@ private fun AgentInputBar(
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth(),
                     textStyle = TextStyle(
                         color = TextPrimary,
                         fontSize = 15.sp,
@@ -969,4 +1011,12 @@ private fun AttachmentOption(
 
 private fun formatConversationDate(timestamp: Long): String {
     return SimpleDateFormat("yyyy年M月d日", Locale.getDefault()).format(Date(timestamp))
+}
+
+private tailrec fun Context.findActivity(): Activity? {
+    return when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 }

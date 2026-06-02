@@ -13,7 +13,7 @@ sealed class Screen(val route: String) {
             imageUris: List<String> = emptyList(),
             mode: String = "append"
         ): String {
-            val encodedUri = imageUri ?: ""
+            val encodedUri = imageUri?.let(Uri::encode) ?: ""
             val encodedUris = imageUris.joinToString(",") { Uri.encode(it) }
             return "save?imageUri=$encodedUri&imageUris=$encodedUris&mode=$mode"
         }
@@ -41,7 +41,7 @@ sealed class Screen(val route: String) {
             imageUris: List<String> = emptyList(),
             mode: String = "append"
         ): String {
-            val encodedUri = imageUri ?: ""
+            val encodedUri = imageUri?.let(Uri::encode) ?: ""
             val encodedUris = imageUris.joinToString(",") { Uri.encode(it) }
             return "edit/$itemId?imageUri=$encodedUri&imageUris=$encodedUris&mode=$mode"
         }

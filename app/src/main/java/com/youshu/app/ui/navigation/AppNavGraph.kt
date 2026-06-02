@@ -121,6 +121,21 @@ fun AppNavGraph() {
         navController.navigate(Screen.Camera.route)
     }
 
+    fun navigateToNewSaveWithPhotos(
+        firstUri: String?,
+        imageUris: List<String>,
+        mode: SavePhotoMode = SavePhotoMode.APPEND
+    ) {
+        navController.navigate(Screen.Save.createRoute()) {
+            popUpTo(Screen.Camera.route) { inclusive = true }
+        }
+        navController.currentBackStackEntry?.savedStateHandle?.apply {
+            set(SAVE_RESULT_IMAGE_URI, firstUri)
+            set(SAVE_RESULT_IMAGE_URIS, imageUris)
+            set(SAVE_RESULT_MODE, mode.name.lowercase())
+        }
+    }
+
     LaunchedEffect(currentRoute) {
         if (currentRoute == Screen.Camera.route) {
             cameraExitGuard = true
@@ -186,9 +201,7 @@ fun AppNavGraph() {
                             val firstUri = encoded.firstOrNull()
                             when (val target = pendingCameraReturn) {
                                 CameraReturnTarget.NewSave -> {
-                                    navController.navigate(Screen.Save.createRoute(firstUri, encoded)) {
-                                        popUpTo(Screen.Camera.route) { inclusive = true }
-                                    }
+                                    navigateToNewSaveWithPhotos(firstUri, encoded)
                                 }
 
                                 is CameraReturnTarget.EditItem -> {
@@ -210,9 +223,7 @@ fun AppNavGraph() {
                                 }
 
                                 null -> {
-                                    navController.navigate(Screen.Save.createRoute(firstUri, encoded)) {
-                                        popUpTo(Screen.Camera.route) { inclusive = true }
-                                    }
+                                    navigateToNewSaveWithPhotos(firstUri, encoded)
                                 }
                             }
                             pendingCameraReturn = null

@@ -97,11 +97,17 @@ class SaveViewModel @Inject constructor(
 
     fun appendPhotos(context: Context, uris: List<Uri>) {
         if (uris.isEmpty()) return
+        val current = _state.value
         val savedPaths = uris.mapNotNull { ImageUtil.saveImageToInternal(context, it) }
         if (savedPaths.isEmpty()) return
-        _state.value = _state.value.copy(
-            imagePaths = (_state.value.imagePaths + savedPaths).distinct()
+        val wasEmpty = current.imagePaths.isEmpty()
+        val updatedPaths = (current.imagePaths + savedPaths).distinct()
+        _state.value = current.copy(
+            imagePaths = updatedPaths
         )
+        if (wasEmpty) {
+            updatedPaths.firstOrNull()?.let(::recognizePrimaryPhoto)
+        }
     }
 
     fun removePhoto(index: Int) {

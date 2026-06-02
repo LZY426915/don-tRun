@@ -32,7 +32,9 @@ class AgentClient @Inject constructor(
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -54,7 +56,16 @@ class AgentClient @Inject constructor(
             val config = requireConfig()
 
             // 发送消息，带工具调用循环（最多 MAX_TOOL_ROUNDS 轮）
-            var currentResponse = executeApiCall(config, buildRequestJson(config, history, newMessage, includeTools = true))
+            var currentResponse = executeApiCall(
+                config,
+                buildRequestJson(
+                    config = config,
+                    history = history,
+                    newMessage = newMessage,
+                    includeTools = true
+                )
+            )
+            var lastToolResults: List<Pair<ToolCall, String>> = emptyList()
 
             for (round in 1..MAX_TOOL_ROUNDS) {
                 val toolCalls = extractToolCalls(currentResponse)
@@ -62,6 +73,7 @@ class AgentClient @Inject constructor(
 
                 // 执行所有工具调用
                 val toolResults = toolCalls.map { tc -> tc to executeToolCall(tc) }
+                lastToolResults = toolResults
 
                 // 将工具结果送回 AI
                 currentResponse = executeApiCall(
@@ -76,7 +88,9 @@ class AgentClient @Inject constructor(
                 )
             }
 
-            extractContent(currentResponse)
+            extractContentOrNull(currentResponse)
+                ?: buildToolFallbackAnswer(newMessage, lastToolResults)
+                ?: error("AI 暂时没有组织出回复，但本地工具也没有查到可用结果。请换个说法再试一次。")
         }
     }
 
@@ -166,9 +180,11 @@ class AgentClient @Inject constructor(
 
                 val errorMsg = when (it.code) {
                     401 -> "API Key 无效，请在\"我的 → AI 模型管理\"中检查密钥是否正确"
+                    402 -> "账户余额不足或计费异常，请检查 DeepSeek 控制台余额与 API 计费状态"
                     403 -> "API Key 没有访问权限，请检查账户状态或联系 API 提供商"
+                    400, 422 -> serverMessage ?: "请求格式不符合 DeepSeek 接口要求"
                     429 -> "请求过于频繁，请稍后重试"
-                    500, 502, 503 -> "AI 服务暂时不可用，请稍后重试"
+                    500, 502, 503, 504 -> "AI 服务暂时不可用，请稍后重试"
                     else -> serverMessage ?: "HTTP ${it.code}"
                 }
                 error("AI 请求失败：$errorMsg")
@@ -192,12 +208,16 @@ class AgentClient @Inject constructor(
 
     /** 从 API 响应中提取文本内容，失败时抛出异常 */
     private fun extractContent(responseBody: String): String {
+        return extractContentOrNull(responseBody)
+            ?: error("AI 没有返回可用内容，请稍后重试")
+    }
+
+    private fun extractContentOrNull(responseBody: String): String? {
         val obj = json.parseToJsonElement(responseBody).jsonObject
         val choice = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject
             ?: error("AI 响应格式异常：无 choices")
         return choice["message"]?.jsonObject?.get("content")?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() }
-            ?: error("AI 没有返回可用内容，请稍后重试")
     }
 
     /** 从 API 响应中提取 tool_calls 列表 */
@@ -317,6 +337,10 @@ class AgentClient @Inject constructor(
                     val summary = inventoryTool.getInventorySummary()
                     formatSummary(summary)
                 }
+                "get_used_up_items" -> {
+                    val items = inventoryTool.getUsedUpItemsSnapshot()
+                    formatUsedUpResults(items)
+                }
                 else -> "未知工具：${toolCall.name}"
             }
         } catch (e: Exception) {
@@ -378,6 +402,31 @@ class AgentClient @Inject constructor(
                 appendLine("${i + 1}. ${item.item.name} | $loc | 还剩${remainingDays}天")
             }
         }.trimEnd()
+    }
+
+    private fun formatUsedUpResults(items: List<ItemDetail>): String {
+        if (items.isEmpty()) {
+            return "目前没有标记为已用完的物品。"
+        }
+        return buildString {
+            appendLine("家里已用完的物品有 ${items.size} 件：")
+            items.forEachIndexed { i, item ->
+                val loc = item.locationName ?: "未设置位置"
+                val cat = item.categoryName ?: "未分类"
+                appendLine("${i + 1}. ${item.item.name} | 位置：$loc | 分类：$cat")
+            }
+        }.trimEnd()
+    }
+
+    private fun buildToolFallbackAnswer(
+        userMessage: String,
+        toolResults: List<Pair<ToolCall, String>>
+    ): String? {
+        val usableResults = toolResults.map { it.second.trim() }.filter { it.isNotBlank() }
+        if (usableResults.isNotEmpty()) {
+            return usableResults.joinToString("\n\n")
+        }
+        return null
     }
 
     private fun formatSummary(summary: InventoryAgentTool.InventorySummary): String {
@@ -488,6 +537,20 @@ class AgentClient @Inject constructor(
                                 }
                             }
                             putJsonArray("required") { add(jsonPrimitive("keyword")) }
+                        }
+                    }
+                }
+            )
+            add(
+                buildJsonObject {
+                    put("type", "function")
+                    putJsonObject("function") {
+                        put("name", "get_used_up_items")
+                        put("description", "列出已经标记为用完的物品。用于回答“家里有哪些东西用完了”“哪些已经用完”“已用完清单”等问题。")
+                        putJsonObject("parameters") {
+                            put("type", "object")
+                            putJsonObject("properties") {
+                            }
                         }
                     }
                 }

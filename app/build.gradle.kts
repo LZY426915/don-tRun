@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,17 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt.android)
+}
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { input -> load(input) }
+    }
+}
+
+fun String.toBuildConfigString(): String {
+    return "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
 
 android {
@@ -18,6 +31,16 @@ android {
         versionCode = 3
         versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField(
+            "String",
+            "DEFAULT_DEEPSEEK_API_KEY",
+            (localProperties.getProperty("youshu.deepseek.apiKey") ?: "").toBuildConfigString()
+        )
+        buildConfigField(
+            "String",
+            "DEFAULT_QWEN_API_KEY",
+            (localProperties.getProperty("youshu.qwen.apiKey") ?: "").toBuildConfigString()
+        )
     }
 
     buildTypes {

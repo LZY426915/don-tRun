@@ -134,7 +134,7 @@ class AgentChatViewModel @Inject constructor(
             ChatHistoryService.saveConversation(context, conversationWithUser)
 
             // 调用真实 AI
-            val history = conversationWithUser.messages
+            val history = current.messages
             val result = agentClient.sendMessage(
                 history = history,
                 newMessage = trimmed
@@ -143,10 +143,12 @@ class AgentChatViewModel @Inject constructor(
             val (replyContent, replyStatus) = result.fold(
                 onSuccess = { content -> content to ChatMessageStatus.NORMAL },
                 onFailure = { error ->
+                    val rawMessage = error.message.orEmpty()
                     val friendlyMessage = when {
-                        error.message?.contains("API Key") == true ||
-                        error.message?.contains("模型") == true -> error.message!!
-                        error.message?.contains("请先在") == true -> error.message!!
+                        rawMessage.contains("timeout", ignoreCase = true) ||
+                            rawMessage.contains("timed out", ignoreCase = true) ->
+                            "AI 请求超时了，可能是网络慢或 DeepSeek 响应慢，请稍后再试。"
+                        rawMessage.isNotBlank() -> rawMessage
                         else -> "小东西暂时没有连上 AI 服务，请稍后重试。"
                     }
                     friendlyMessage to ChatMessageStatus.ERROR

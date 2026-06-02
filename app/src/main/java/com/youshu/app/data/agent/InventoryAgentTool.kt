@@ -3,6 +3,7 @@ package com.youshu.app.data.agent
 import com.youshu.app.data.local.dao.CategoryDao
 import com.youshu.app.data.local.dao.ItemDao
 import com.youshu.app.data.local.dao.LocationDao
+import com.youshu.app.data.local.entity.Item
 import com.youshu.app.data.local.entity.ItemDetail
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -84,6 +85,12 @@ class InventoryAgentTool @Inject constructor(
     suspend fun getExpiringItemsSnapshot(days: Int): List<ItemDetail> {
         val threshold = System.currentTimeMillis() + daysToMillis(days)
         return itemDao.getExpiringItems(threshold).firstOrNull().orEmpty()
+    }
+
+    suspend fun getUsedUpItemsSnapshot(): List<ItemDetail> {
+        return itemDao.getAllItems().firstOrNull()
+            .orEmpty()
+            .filter { it.item.status == Item.STATUS_USED_UP }
     }
 
     // ──────────────────────────────────────────
