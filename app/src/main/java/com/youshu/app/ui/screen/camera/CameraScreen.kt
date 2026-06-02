@@ -227,8 +227,8 @@ fun CameraScreen(
             Box(
                 modifier = Modifier
                     .padding(
-                        start = with(density) { x.toDp() - 36.dp },
-                        top = with(density) { y.toDp() - 36.dp }
+                        start = with(density) { (x.toDp() - 36.dp).coerceAtLeast(0.dp) },
+                        top = with(density) { (y.toDp() - 36.dp).coerceAtLeast(0.dp) }
                     )
                     .size(72.dp)
                     .border(2.dp, Color.White.copy(alpha = 0.92f), RoundedCornerShape(20.dp))

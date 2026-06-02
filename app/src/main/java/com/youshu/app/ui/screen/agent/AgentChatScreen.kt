@@ -58,10 +58,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -79,10 +79,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.youshu.app.data.agent.AgentItemCard
-import com.youshu.app.data.agent.AgentMockReply
-import com.youshu.app.data.agent.AgentMockService
 import com.youshu.app.data.agent.ChatConversation
 import com.youshu.app.data.agent.ChatHistoryService
 import com.youshu.app.data.agent.ChatMessage
@@ -95,25 +94,35 @@ import com.youshu.app.ui.theme.PurpleTint
 import com.youshu.app.ui.theme.TextHint
 import com.youshu.app.ui.theme.TextPrimary
 import com.youshu.app.ui.theme.TextSecondary
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val recommendedQuestions = listOf(
+    "冰箱里有什么快过期？",
+    "我的充电器放在哪？",
+    "帮我整理一份购物清单",
+    "家里有哪些东西用完了？",
+    "牛奶还有多久过期？"
+)
 
 @Composable
 fun AgentChatScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    var conversations by remember { mutableStateOf<List<ChatConversation>>(emptyList()) }
-    var activeConversation by remember { mutableStateOf<ChatConversation?>(null) }
+    val viewModel: com.youshu.app.ui.viewmodel.AgentChatViewModel = hiltViewModel()
+
+    val conversations by viewModel.conversations.collectAsState()
+    val activeConversation by viewModel.activeConversation.collectAsState()
+    val isReplying by viewModel.isReplying.collectAsState()
+    val historyVisible by viewModel.historyVisible.collectAsState()
+    val searchKeyword by viewModel.searchKeyword.collectAsState()
+
     var input by rememberSaveable { mutableStateOf("") }
-    var searchKeyword by rememberSaveable { mutableStateOf("") }
     var attachmentsExpanded by rememberSaveable { mutableStateOf(false) }
-    var historyVisible by rememberSaveable { mutableStateOf(false) }
-    var isReplying by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
+
     val messages = activeConversation?.messages.orEmpty()
     val displayMessages = if (isReplying) {
         messages + ChatMessage(
@@ -127,161 +136,18 @@ fun AgentChatScreen(
         messages
     }
 
-    fun replaceConversation(conversation: ChatConversation) {
-        activeConversation = conversation
-        conversations = conversations
-            .filterNot { it.id == conversation.id }
-            .plus(conversation)
-            .sortedByDescending { it.updatedAt }
-    }
-
-    fun submitTextMessage(rawMessage: String) {
-        val message = rawMessage.trim()
-        val current = activeConversation ?: return
-        if (message.isEmpty() || isReplying) return
-
-        val userMessage = ChatHistoryService.createUserMessage(content = message)
-        val firstUserMessage = current.messages.none { it.role == ChatRole.USER }
-        val withUserMessage = current.copy(
-            title = if (firstUserMessage || current.title == ChatHistoryService.DEFAULT_TITLE) {
-                ChatHistoryService.titleFromMessage(message)
-            } else {
-                current.title
-            },
-            updatedAt = userMessage.createdAt,
-            messages = current.messages + userMessage
-        )
-
+    fun submitMessage() {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return
+        viewModel.submitTextMessage(trimmed)
         input = ""
         attachmentsExpanded = false
-        isReplying = true
-        replaceConversation(withUserMessage)
-
-        coroutineScope.launch {
-            ChatHistoryService.saveConversation(context, withUserMessage)
-            val reply = runCatching {
-                AgentMockService.sendText(message)
-            }.getOrElse {
-                AgentMockReply(
-                    content = "小东西暂时没有拿到回复，请稍后重试。",
-                    status = ChatMessageStatus.ERROR
-                )
-            }
-            val assistantMessage = ChatHistoryService.createAssistantMessage(
-                content = reply.content,
-                status = reply.status,
-                itemCards = reply.itemCards
-            )
-            val withAssistantMessage = withUserMessage.copy(
-                updatedAt = assistantMessage.createdAt,
-                messages = withUserMessage.messages + assistantMessage
-            )
-            replaceConversation(withAssistantMessage)
-            ChatHistoryService.saveConversation(context, withAssistantMessage)
-            isReplying = false
-        }
-    }
-
-    fun submitMessage() {
-        submitTextMessage(input)
     }
 
     fun submitImageMessage(source: String) {
-        val current = activeConversation ?: return
-        if (isReplying) return
-
-        val userMessage = ChatHistoryService.createUserMessage(
-            content = "$source 图片",
-            imageUri = "mock://agent-image/${source}/${System.currentTimeMillis()}"
-        )
-        val firstUserMessage = current.messages.none { it.role == ChatRole.USER }
-        val withImageMessage = current.copy(
-            title = if (firstUserMessage || current.title == ChatHistoryService.DEFAULT_TITLE) {
-                ChatHistoryService.titleFromMessage("$source 图片识别")
-            } else {
-                current.title
-            },
-            updatedAt = userMessage.createdAt,
-            messages = current.messages + userMessage
-        )
-
+        viewModel.submitImageMessage(source)
         input = ""
         attachmentsExpanded = false
-        isReplying = true
-        replaceConversation(withImageMessage)
-
-        coroutineScope.launch {
-            ChatHistoryService.saveConversation(context, withImageMessage)
-            val reply = AgentMockService.sendImage(source)
-            val assistantMessage = ChatHistoryService.createAssistantMessage(
-                content = reply.content,
-                status = reply.status,
-                itemCards = reply.itemCards
-            )
-            val withAssistantMessage = withImageMessage.copy(
-                updatedAt = assistantMessage.createdAt,
-                messages = withImageMessage.messages + assistantMessage
-            )
-            replaceConversation(withAssistantMessage)
-            ChatHistoryService.saveConversation(context, withAssistantMessage)
-            isReplying = false
-        }
-    }
-
-    fun handleTakePhoto() {
-        submitImageMessage("拍照")
-        Toast.makeText(context, "已插入拍照图片占位", Toast.LENGTH_SHORT).show()
-    }
-
-    fun handleChooseImage() {
-        submitImageMessage("相册")
-        Toast.makeText(context, "已插入相册图片占位", Toast.LENGTH_SHORT).show()
-    }
-
-    fun startNewConversation() {
-        coroutineScope.launch {
-            val conversation = ChatHistoryService.createConversation(context)
-            input = ""
-            attachmentsExpanded = false
-            historyVisible = false
-            replaceConversation(conversation)
-        }
-    }
-
-    fun selectConversation(conversation: ChatConversation) {
-        input = ""
-        attachmentsExpanded = false
-        activeConversation = conversation
-        historyVisible = false
-    }
-
-    fun deleteConversation(conversation: ChatConversation) {
-        coroutineScope.launch {
-            ChatHistoryService.deleteConversation(context, conversation.id)
-            val remaining = conversations.filterNot { it.id == conversation.id }
-            if (remaining.isEmpty()) {
-                val freshConversation = ChatHistoryService.createConversation(context)
-                conversations = listOf(freshConversation)
-                activeConversation = freshConversation
-            } else {
-                conversations = remaining
-                if (activeConversation?.id == conversation.id) {
-                    activeConversation = remaining.first()
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        val loadedConversations = ChatHistoryService.getConversations(context)
-        val initialConversation = loadedConversations.firstOrNull()
-            ?: ChatHistoryService.createConversation(context)
-        conversations = if (loadedConversations.isEmpty()) {
-            listOf(initialConversation)
-        } else {
-            loadedConversations
-        }
-        activeConversation = initialConversation
     }
 
     LaunchedEffect(displayMessages.size, activeConversation?.id, isReplying) {
@@ -300,7 +166,7 @@ fun AgentChatScreen(
         ) {
             AgentTopBar(
                 onBack = onBack,
-                onOpenHistory = { historyVisible = true }
+                onOpenHistory = { viewModel.setHistoryVisible(true) }
             )
 
             LazyColumn(
@@ -328,9 +194,9 @@ fun AgentChatScreen(
             }
 
             RecommendedQuestionBar(
-                questions = AgentMockService.recommendedQuestions,
+                questions = recommendedQuestions,
                 onQuestionClick = { question ->
-                    submitTextMessage(question)
+                    viewModel.submitTextMessage(question)
                     attachmentsExpanded = false
                 }
             )
@@ -343,13 +209,14 @@ fun AgentChatScreen(
                 onSend = ::submitMessage,
                 onVoiceClick = {
                     attachmentsExpanded = false
-                    Toast.makeText(context, "语音输入能力待接入小东西", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "语音输入能力待接入", Toast.LENGTH_SHORT).show()
                 },
-                onTakePhoto = ::handleTakePhoto,
-                onChooseImage = ::handleChooseImage
+                onTakePhoto = { submitImageMessage("拍照") },
+                onChooseImage = { submitImageMessage("相册") }
             )
         }
 
+        // 历史对话侧边栏遮罩
         AnimatedVisibility(
             visible = historyVisible,
             enter = fadeIn(),
@@ -359,7 +226,7 @@ fun AgentChatScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.18f))
-                    .clickable { historyVisible = false }
+                    .clickable { viewModel.setHistoryVisible(false) }
             )
         }
 
@@ -372,15 +239,19 @@ fun AgentChatScreen(
                 conversations = conversations,
                 activeConversationId = activeConversation?.id,
                 searchKeyword = searchKeyword,
-                onSearchKeywordChange = { searchKeyword = it },
-                onNewConversation = ::startNewConversation,
-                onSelectConversation = ::selectConversation,
-                onDeleteConversation = ::deleteConversation,
-                onDismiss = { historyVisible = false }
+                onSearchKeywordChange = { viewModel.setSearchKeyword(it) },
+                onNewConversation = { viewModel.startNewConversation() },
+                onSelectConversation = { viewModel.selectConversation(it) },
+                onDeleteConversation = { viewModel.deleteConversation(it) },
+                onDismiss = { viewModel.setHistoryVisible(false) }
             )
         }
     }
 }
+
+// ──────────────────────────────────────────
+// 以下 UI 组件保持不变
+// ──────────────────────────────────────────
 
 @Composable
 private fun AgentTopBar(
