@@ -206,12 +206,12 @@ class AiInferenceRepository @Inject constructor(
 
     private suspend fun requireConfig(purpose: String): AiModelConfig {
         val config = aiModelRepository.getPrimaryModelForPurpose(purpose)
-            ?: error("请先在 AI 模型管理中配置${AiModelConfig.purposeLabel(purpose)}模型")
+            ?: error("请先在 API-Key 管理系统中配置${AiModelConfig.purposeLabel(purpose)}模型")
         require(config.apiKey.isNotBlank()) {
-            "请先在 AI 模型管理中填写${AiModelConfig.purposeLabel(purpose)}的 API Key"
+            "请先在 API-Key 管理系统中填写${AiModelConfig.purposeLabel(purpose)}的 API Key"
         }
         require(config.modelName.isNotBlank()) {
-            "请先在 AI 模型管理中填写${AiModelConfig.purposeLabel(purpose)}的模型名称"
+            "请先在 API-Key 管理系统中填写${AiModelConfig.purposeLabel(purpose)}的模型名称"
         }
         return config
     }

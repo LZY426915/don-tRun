@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.youshu.app.BuildConfig
+import com.youshu.app.data.local.entity.AiModelConfig
+import com.youshu.app.data.repository.AiModelRepository
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -30,7 +32,8 @@ import okhttp3.Request
 
 @Singleton
 class WeatherAgentTool @Inject constructor(
-    @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context,
+    private val aiModelRepository: AiModelRepository
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -43,9 +46,11 @@ class WeatherAgentTool @Inject constructor(
         city: String,
         intent: String
     ): String = withContext(Dispatchers.IO) {
-        val apiKey = BuildConfig.DEFAULT_AMAP_WEB_API_KEY.trim()
+        val config = aiModelRepository.getPrimaryModelForPurpose(AiModelConfig.PURPOSE_WEATHER)
+        val apiKey = config?.apiKey?.trim().orEmpty()
+            .ifEmpty { BuildConfig.DEFAULT_AMAP_WEB_API_KEY.trim() }
         if (apiKey.isBlank()) {
-            return@withContext "天气功能需要先配置高德 Web 服务 API Key。请在 local.properties 里填写 youshu.amap.webApiKey。"
+            return@withContext "天气功能需要先配置高德 Web 服务 API Key。请在「我的」→「API-Key 管理系统」中编辑高德天气的 API Key，或在 local.properties 里填写 youshu.amap.webApiKey。"
         }
 
         val normalizedCity = city.trim()

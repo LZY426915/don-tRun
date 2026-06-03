@@ -19,10 +19,12 @@ data class AiModelConfig(
     companion object {
         const val PURPOSE_TEXT_SEARCH = "text_search"
         const val PURPOSE_IMAGE_RECOGNITION = "image_recognition"
+        const val PURPOSE_WEATHER = "weather"
 
         fun purposeLabel(purpose: String): String {
             return when (purpose) {
                 PURPOSE_IMAGE_RECOGNITION -> "图片识别"
+                PURPOSE_WEATHER -> "天气服务"
                 else -> "文字搜索"
             }
         }

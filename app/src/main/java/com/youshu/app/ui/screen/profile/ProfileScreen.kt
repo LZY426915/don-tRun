@@ -173,8 +173,8 @@ fun ProfileScreen(
             ) {
                 MenuRow(
                     icon = Icons.Default.AutoAwesome,
-                    title = "AI 模型管理",
-                    subtitle = "添加、查看和预置模型连接",
+                    title = "API-Key 管理系统",
+                    subtitle = "管理天气、AI 等第三方服务的 API Key",
                     onClick = { showModelDialog = true }
                 )
                 DividerSpacer()
@@ -234,8 +234,8 @@ fun ProfileScreen(
 
     if (showModelDialog) {
         AppDialog(
-            title = "AI 模型管理",
-            subtitle = "当前先维护模型别名、Provider、Endpoint 和 API Key。",
+            title = "API-Key 管理系统",
+            subtitle = "管理各服务的连接信息与 API Key。",
             onDismissRequest = { showModelDialog = false },
             confirmText = "新增模型",
             onConfirm = {
@@ -331,7 +331,7 @@ fun ProfileScreen(
 
     if (showAddModelDialog) {
         AiModelEditorDialog(
-            title = if (editingModelId == null) "新增 AI 模型" else "编辑 AI 模型",
+            title = if (editingModelId == null) "新增 API-Key" else "编辑 API-Key",
             confirmText = if (editingModelId == null) "保存" else "更新",
             alias = newAlias,
             provider = newProvider,
@@ -523,6 +523,12 @@ private fun AiModelEditorDialog(
                 text = "图片识别",
                 selected = purpose == AiModelConfig.PURPOSE_IMAGE_RECOGNITION,
                 onClick = { onPurposeChange(AiModelConfig.PURPOSE_IMAGE_RECOGNITION) },
+                modifier = Modifier.weight(1f)
+            )
+            PurposeChip(
+                text = "天气服务",
+                selected = purpose == AiModelConfig.PURPOSE_WEATHER,
+                onClick = { onPurposeChange(AiModelConfig.PURPOSE_WEATHER) },
                 modifier = Modifier.weight(1f)
             )
         }

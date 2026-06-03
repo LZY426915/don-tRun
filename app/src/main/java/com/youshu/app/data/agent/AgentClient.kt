@@ -175,12 +175,12 @@ class AgentClient @Inject constructor(
 
     private suspend fun requireConfig(): AiModelConfig {
         val config = aiModelRepository.getPrimaryModelForPurpose(AiModelConfig.PURPOSE_TEXT_SEARCH)
-            ?: error("请先在\"我的 → AI 模型管理\"中配置文字搜索模型")
+            ?: error("请先在\"我的 → API-Key 管理系统\"中配置文字搜索模型")
         require(config.apiKey.isNotBlank()) {
-            "请先在\"我的 → AI 模型管理\"中填写 DeepSeek 的 API Key"
+            "请先在\"我的 → API-Key 管理系统\"中填写 DeepSeek 的 API Key"
         }
         require(config.modelName.isNotBlank()) {
-            "请先在\"我的 → AI 模型管理\"中填写模型名称"
+            "请先在\"我的 → API-Key 管理系统\"中填写模型名称"
         }
         return config
     }
@@ -208,7 +208,7 @@ class AgentClient @Inject constructor(
                 } catch (_: Exception) { null }
 
                 val errorMsg = when (it.code) {
-                    401 -> "API Key 无效，请在\"我的 → AI 模型管理\"中检查密钥是否正确"
+                    401 -> "API Key 无效，请在\"我的 → API-Key 管理系统\"中检查密钥是否正确"
                     402 -> "账户余额不足或计费异常，请检查 DeepSeek 控制台余额与 API 计费状态"
                     403 -> "API Key 没有访问权限，请检查账户状态或联系 API 提供商"
                     400, 422 -> serverMessage ?: "请求格式不符合 DeepSeek 接口要求"

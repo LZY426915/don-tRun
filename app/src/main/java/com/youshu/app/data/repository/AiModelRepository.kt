@@ -76,6 +76,7 @@ class AiModelRepository @Inject constructor(
         val defaultKey = when (purpose) {
             AiModelConfig.PURPOSE_TEXT_SEARCH -> BuildConfig.DEFAULT_DEEPSEEK_API_KEY
             AiModelConfig.PURPOSE_IMAGE_RECOGNITION -> BuildConfig.DEFAULT_QWEN_API_KEY
+            AiModelConfig.PURPOSE_WEATHER -> BuildConfig.DEFAULT_AMAP_WEB_API_KEY
             else -> ""
         }
         return if (defaultKey.isBlank()) this else copy(apiKey = defaultKey)

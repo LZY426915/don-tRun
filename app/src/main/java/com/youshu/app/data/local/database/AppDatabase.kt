@@ -17,7 +17,7 @@ import com.youshu.app.data.local.entity.Location
 
 @Database(
     entities = [Item::class, Category::class, Location::class, AiModelConfig::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -93,6 +93,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                SeedHelper.ensureWeatherModel(db)
+            }
+        }
+
         fun buildDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -107,7 +113,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .addCallback(PrepopulateCallback())
                     .build()
@@ -309,6 +316,51 @@ private object SeedHelper {
                 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                 'qwen3-vl-plus',
                 'image_recognition',
+                '',
+                $now,
+                $now
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO ai_model_configs (
+                alias, provider, endpoint, modelName, purpose, apiKey, createdAt, updatedAt
+            )
+            VALUES (
+                '高德天气',
+                '高德',
+                'https://restapi.amap.com/v3',
+                'weather-live',
+                'weather',
+                '',
+                $now,
+                $now
+            )
+            """.trimIndent()
+        )
+    }
+
+    fun ensureWeatherModel(db: SupportSQLiteDatabase) {
+        val count = db.query(
+            "SELECT COUNT(*) FROM ai_model_configs WHERE purpose = 'weather'"
+        ).useCursor { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+        if (count > 0) return
+
+        val now = System.currentTimeMillis()
+        db.execSQL(
+            """
+            INSERT INTO ai_model_configs (
+                alias, provider, endpoint, modelName, purpose, apiKey, createdAt, updatedAt
+            )
+            VALUES (
+                '高德天气',
+                '高德',
+                'https://restapi.amap.com/v3',
+                'weather-live',
+                'weather',
                 '',
                 $now,
                 $now
