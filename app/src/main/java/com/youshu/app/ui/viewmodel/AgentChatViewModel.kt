@@ -1,6 +1,7 @@
 package com.youshu.app.ui.viewmodel
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.youshu.app.data.agent.AgentClient
@@ -8,8 +9,11 @@ import com.youshu.app.data.agent.ChatConversation
 import com.youshu.app.data.agent.ChatHistoryService
 import com.youshu.app.data.agent.ChatMessage
 import com.youshu.app.data.agent.ChatMessageStatus
+import com.youshu.app.data.ai.AiInferenceRepository
+import com.youshu.app.util.ImageUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +24,7 @@ import javax.inject.Inject
 @HiltViewModel
 class AgentChatViewModel @Inject constructor(
     private val agentClient: AgentClient,
+    private val aiInferenceRepository: AiInferenceRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -31,6 +36,9 @@ class AgentChatViewModel @Inject constructor(
 
     private val _isReplying = MutableStateFlow(false)
     val isReplying: StateFlow<Boolean> = _isReplying.asStateFlow()
+
+    private val _isTranscribingVoice = MutableStateFlow(false)
+    val isTranscribingVoice: StateFlow<Boolean> = _isTranscribingVoice.asStateFlow()
 
     private val _historyVisible = MutableStateFlow(false)
     val historyVisible: StateFlow<Boolean> = _historyVisible.asStateFlow()
@@ -169,18 +177,20 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
-    fun submitImageMessage(source: String) {
+    fun submitImageMessage(imageUri: Uri, userQuestion: String?) {
         val current = _activeConversation.value ?: return
         if (_isReplying.value) return
 
+        val imagePath = resolveImagePath(imageUri) ?: return
+        val question = userQuestion?.trim().takeUnless { it.isNullOrBlank() } ?: "帮我看看这张图片"
         val userMessage = ChatHistoryService.createUserMessage(
-            content = "$source 图片",
-            imageUri = "mock://agent-image/${source}/${System.currentTimeMillis()}"
+            content = question,
+            imageUri = imagePath
         )
         val firstUserMessage = current.messages.none { it.role == com.youshu.app.data.agent.ChatRole.USER }
         val conversationWithImage = current.copy(
             title = if (firstUserMessage || current.title == ChatHistoryService.DEFAULT_TITLE) {
-                ChatHistoryService.titleFromMessage("$source 图片识别")
+                ChatHistoryService.titleFromMessage(question)
             } else {
                 current.title
             },
@@ -194,10 +204,40 @@ class AgentChatViewModel @Inject constructor(
         viewModelScope.launch {
             ChatHistoryService.saveConversation(context, conversationWithImage)
 
-            // 图片消息暂时使用文本模式告知用户
+            val visionResult = aiInferenceRepository.describeImageForAgent(
+                imagePath = imagePath,
+                userQuestion = question
+            )
+            val result = visionResult.fold(
+                onSuccess = { imageDescription ->
+                    agentClient.sendMessage(
+                        history = current.messages,
+                        newMessage = buildImageAgentPrompt(
+                            userQuestion = question,
+                            imageDescription = imageDescription
+                        )
+                    )
+                },
+                onFailure = { error -> Result.failure(error) }
+            )
+            val (replyContent, replyStatus) = result.fold(
+                onSuccess = { content -> content to ChatMessageStatus.NORMAL },
+                onFailure = { error ->
+                    val rawMessage = error.message.orEmpty()
+                    val friendlyMessage = when {
+                        rawMessage.contains("timeout", ignoreCase = true) ||
+                            rawMessage.contains("timed out", ignoreCase = true) ->
+                            "图片识别或 AI 回复超时了，可能是网络慢，请稍后再试。"
+                        rawMessage.isNotBlank() -> rawMessage
+                        else -> "图片暂时没识别成功，请稍后再试。"
+                    }
+                    friendlyMessage to ChatMessageStatus.ERROR
+                }
+            )
+
             val assistantMessage = ChatHistoryService.createAssistantMessage(
-                content = "图片识别功能正在接入中，暂时还无法分析图片内容。你可以先用文字告诉我你想找什么，我会尽力帮忙！",
-                status = ChatMessageStatus.NORMAL
+                content = replyContent,
+                status = replyStatus
             )
             val conversationWithAssistant = conversationWithImage.copy(
                 updatedAt = assistantMessage.createdAt,
@@ -213,6 +253,40 @@ class AgentChatViewModel @Inject constructor(
     // UI 状态
     // ──────────────────────────────────────────
 
+    fun submitVoiceMessage(audioPath: String) {
+        if (_isReplying.value || _isTranscribingVoice.value) return
+
+        _isTranscribingVoice.value = true
+        viewModelScope.launch {
+            val result = aiInferenceRepository.transcribeSpeech(audioPath)
+            _isTranscribingVoice.value = false
+
+            result.fold(
+                onSuccess = { transcript ->
+                    val cleaned = transcript.trim()
+                    if (cleaned.isBlank()) {
+                        appendAssistantErrorMessage("语音没有识别出文字，再说一次试试。")
+                    } else {
+                        submitTextMessage(cleaned)
+                    }
+                },
+                onFailure = { error ->
+                    val rawMessage = error.message.orEmpty()
+                    val friendlyMessage = when {
+                        rawMessage.contains("timeout", ignoreCase = true) ||
+                            rawMessage.contains("timed out", ignoreCase = true) ->
+                            "语音识别超时了，可能是网络慢，稍后再试一次。"
+                        rawMessage.contains("401") || rawMessage.contains("API Key", ignoreCase = true) ->
+                            "语音识别没有连上通义千问，请检查 Qwen 的 API Key。"
+                        rawMessage.isNotBlank() -> rawMessage
+                        else -> "语音识别失败了，再试一次。"
+                    }
+                    appendAssistantErrorMessage(friendlyMessage)
+                }
+            )
+        }
+    }
+
     fun setHistoryVisible(visible: Boolean) {
         _historyVisible.value = visible
     }
@@ -224,6 +298,40 @@ class AgentChatViewModel @Inject constructor(
     // ──────────────────────────────────────────
     // 内部辅助
     // ──────────────────────────────────────────
+
+    private suspend fun appendAssistantErrorMessage(content: String) {
+        val current = _activeConversation.value ?: return
+        val assistantMessage = ChatHistoryService.createAssistantMessage(
+            content = content,
+            status = ChatMessageStatus.ERROR
+        )
+        val updated = current.copy(
+            updatedAt = assistantMessage.createdAt,
+            messages = current.messages + assistantMessage
+        )
+        replaceConversation(updated)
+        ChatHistoryService.saveConversation(context, updated)
+    }
+
+    private fun resolveImagePath(uri: Uri): String? {
+        val filePath = uri.path?.takeIf { uri.scheme == "file" && File(it).exists() }
+        return filePath ?: ImageUtil.saveImageToInternal(context, uri)
+    }
+
+    private fun buildImageAgentPrompt(
+        userQuestion: String,
+        imageDescription: String
+    ): String {
+        return """
+        用户发来一张图片，并问：$userQuestion
+
+        下面是图片识别模型根据这张图片看到的内容，请把它当作你已经看到图片后的事实参考：
+        $imageDescription
+
+        请像平常聊天一样直接回答用户，不要提到“Qwen”“视觉模型”“识别结果”这些内部流程。
+        如果用户的问题需要查询家庭库存，可以照常调用工具；如果图片线索不足，就自然告诉用户还需要补充什么。
+        """.trimIndent()
+    }
 
     /**
      * 替换对话列表中的某条对话，并自动裁剪消息和对话总数。

@@ -1,8 +1,11 @@
 package com.youshu.app.ui.screen.agent
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -13,6 +16,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -60,6 +65,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -89,6 +95,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.youshu.app.data.agent.AgentItemCard
@@ -98,12 +106,16 @@ import com.youshu.app.data.agent.ChatMessage
 import com.youshu.app.data.agent.ChatMessageStatus
 import com.youshu.app.data.agent.ChatRole
 import com.youshu.app.ui.components.AppDecorativeBackground
+import com.youshu.app.ui.components.PhotoEditOverlay
 import com.youshu.app.ui.theme.DividerSoft
 import com.youshu.app.ui.theme.PurpleStart
 import com.youshu.app.ui.theme.PurpleTint
 import com.youshu.app.ui.theme.TextHint
 import com.youshu.app.ui.theme.TextPrimary
 import com.youshu.app.ui.theme.TextSecondary
+import com.youshu.app.util.ImageUtil
+import com.youshu.app.util.WavAudioRecorder
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -127,18 +139,150 @@ fun AgentChatScreen(
     val conversations by viewModel.conversations.collectAsState()
     val activeConversation by viewModel.activeConversation.collectAsState()
     val isReplying by viewModel.isReplying.collectAsState()
+    val isTranscribingVoice by viewModel.isTranscribingVoice.collectAsState()
     val historyVisible by viewModel.historyVisible.collectAsState()
     val searchKeyword by viewModel.searchKeyword.collectAsState()
 
     val activity = remember(context) { context.findActivity() }
     var input by rememberSaveable { mutableStateOf("") }
     var attachmentsExpanded by rememberSaveable { mutableStateOf(false) }
+    var pendingImageEditUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingAttachmentUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingWeatherQuestionAfterLocationPermission by remember { mutableStateOf<String?>(null) }
+    var cameraOutputUri by remember { mutableStateOf<Uri?>(null) }
+    var isRecordingVoice by remember { mutableStateOf(false) }
+    var voiceRecordingStartAt by remember { mutableStateOf(0L) }
+    val voiceRecorder = remember(context) { WavAudioRecorder(context.applicationContext) }
     val listState = rememberLazyListState()
     var compensatedKeyboardOffsetPx by remember { mutableStateOf(0f) }
     val keyboardOffset by animateDpAsState(
         targetValue = with(density) { WindowInsets.ime.getBottom(density).toDp() },
         label = "agentKeyboardOffset"
     )
+
+    fun createAgentCameraUri(): Uri? {
+        return runCatching {
+            val dir = File(context.cacheDir, "agent_photos").apply { mkdirs() }
+            val file = File(dir, "agent_${System.currentTimeMillis()}.jpg")
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+        }.getOrNull()
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            cameraOutputUri?.let { pendingImageEditUri = it }
+        }
+        cameraOutputUri = null
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val uri = createAgentCameraUri()
+            if (uri != null) {
+                cameraOutputUri = uri
+                takePictureLauncher.launch(uri)
+            } else {
+                Toast.makeText(context, "创建拍照文件失败", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            pendingImageEditUri = uri
+        }
+    }
+
+    fun launchAgentCamera() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            val uri = createAgentCameraUri()
+            if (uri != null) {
+                cameraOutputUri = uri
+                takePictureLauncher.launch(uri)
+            } else {
+                Toast.makeText(context, "创建拍照文件失败", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    fun startVoiceRecording() {
+        if (isReplying || isTranscribingVoice) {
+            Toast.makeText(context, "小东西正在处理上一条消息", Toast.LENGTH_SHORT).show()
+            return
+        }
+        runCatching {
+            voiceRecorder.start()
+        }.onSuccess {
+            voiceRecordingStartAt = System.currentTimeMillis()
+            isRecordingVoice = true
+            attachmentsExpanded = false
+            Toast.makeText(context, "正在录音，再点一次结束", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, error.message ?: "录音启动失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun stopVoiceRecording() {
+        val file = voiceRecorder.stop()
+        isRecordingVoice = false
+        val elapsed = System.currentTimeMillis() - voiceRecordingStartAt
+        if (file == null || !file.exists() || file.length() < WavAudioRecorder.MIN_AUDIO_BYTES || elapsed < 500) {
+            Toast.makeText(context, "录音太短，再说一次试试", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(context, "正在识别语音", Toast.LENGTH_SHORT).show()
+        viewModel.submitVoiceMessage(file.absolutePath)
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startVoiceRecording()
+        } else {
+            Toast.makeText(context, "需要麦克风权限才能语音提问", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "未开启定位，会尝试用网络定位查天气", Toast.LENGTH_SHORT).show()
+        }
+        pendingWeatherQuestionAfterLocationPermission?.let { question ->
+            pendingWeatherQuestionAfterLocationPermission = null
+            viewModel.submitTextMessage(question)
+            input = ""
+            attachmentsExpanded = false
+        }
+    }
+
+    fun toggleVoiceRecording() {
+        if (isRecordingVoice) {
+            stopVoiceRecording()
+            return
+        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startVoiceRecording()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     DisposableEffect(activity) {
         val window = activity?.window
@@ -154,12 +298,20 @@ fun AgentChatScreen(
         }
     }
 
+    DisposableEffect(voiceRecorder) {
+        onDispose {
+            if (voiceRecorder.isRecording) {
+                voiceRecorder.stop()
+            }
+        }
+    }
+
     val messages = activeConversation?.messages.orEmpty()
-    val displayMessages = if (isReplying) {
+    val displayMessages = if (isReplying || isTranscribingVoice) {
         messages + ChatMessage(
             id = "agent-loading-${activeConversation?.id.orEmpty()}",
             role = ChatRole.ASSISTANT,
-            content = "小东西正在整理答案...",
+            content = if (isTranscribingVoice) "正在识别你的语音..." else "小东西正在整理答案...",
             createdAt = System.currentTimeMillis(),
             status = ChatMessageStatus.LOADING
         )
@@ -167,21 +319,51 @@ fun AgentChatScreen(
         messages
     }
 
+    fun hasLocationPermission(): Boolean {
+        val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+        val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        return coarse == PackageManager.PERMISSION_GRANTED || fine == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun String.looksLikeWeatherQuestion(): Boolean {
+        val text = trim()
+        return listOf(
+            "天气", "气温", "温度", "冷不冷", "热不热", "穿什么", "穿衣",
+            "带伞", "下雨", "下雪", "防晒", "出门", "饮食", "吃什么"
+        ).any { text.contains(it) }
+    }
+
+    fun submitTextQuestion(message: String) {
+        if (message.looksLikeWeatherQuestion() && !hasLocationPermission()) {
+            pendingWeatherQuestionAfterLocationPermission = message
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            return
+        }
+        viewModel.submitTextMessage(message)
+    }
+
     fun submitMessage() {
         val trimmed = input.trim()
+        val imageUri = pendingAttachmentUri
+        if (imageUri != null) {
+            viewModel.submitImageMessage(imageUri, trimmed.takeIf { it.isNotEmpty() })
+            pendingAttachmentUri = null
+            input = ""
+            attachmentsExpanded = false
+            return
+        }
         if (trimmed.isEmpty()) return
-        viewModel.submitTextMessage(trimmed)
+        submitTextQuestion(trimmed)
         input = ""
         attachmentsExpanded = false
     }
 
-    fun submitImageMessage(source: String) {
-        viewModel.submitImageMessage(source)
-        input = ""
+    fun submitEditedImageMessage(uri: Uri) {
+        pendingAttachmentUri = uri
         attachmentsExpanded = false
     }
 
-    LaunchedEffect(displayMessages.size, activeConversation?.id, isReplying) {
+    LaunchedEffect(displayMessages.size, activeConversation?.id, isReplying, isTranscribingVoice) {
         if (displayMessages.isNotEmpty()) {
             listState.animateScrollToItem(displayMessages.lastIndex)
         }
@@ -238,7 +420,11 @@ fun AgentChatScreen(
             RecommendedQuestionBar(
                 questions = recommendedQuestions,
                 onQuestionClick = { question ->
-                    viewModel.submitTextMessage(question)
+                    if (pendingAttachmentUri != null) {
+                        input = question
+                    } else {
+                        submitTextQuestion(question)
+                    }
                     attachmentsExpanded = false
                 }
             )
@@ -246,15 +432,24 @@ fun AgentChatScreen(
             AgentInputBar(
                 value = input,
                 onValueChange = { input = it },
+                pendingImageUri = pendingAttachmentUri,
+                onRemovePendingImage = { pendingAttachmentUri = null },
+                isRecordingVoice = isRecordingVoice,
                 attachmentsExpanded = attachmentsExpanded,
                 onToggleAttachments = { attachmentsExpanded = !attachmentsExpanded },
                 onSend = ::submitMessage,
                 onVoiceClick = {
                     attachmentsExpanded = false
-                    Toast.makeText(context, "语音输入能力待接入", Toast.LENGTH_SHORT).show()
+                    toggleVoiceRecording()
                 },
-                onTakePhoto = { submitImageMessage("拍照") },
-                onChooseImage = { submitImageMessage("相册") }
+                onTakePhoto = {
+                    attachmentsExpanded = false
+                    launchAgentCamera()
+                },
+                onChooseImage = {
+                    attachmentsExpanded = false
+                    galleryLauncher.launch("image/*")
+                }
             )
         }
 
@@ -286,6 +481,27 @@ fun AgentChatScreen(
                 onSelectConversation = { viewModel.selectConversation(it) },
                 onDeleteConversation = { viewModel.deleteConversation(it) },
                 onDismiss = { viewModel.setHistoryVisible(false) }
+            )
+        }
+
+        pendingImageEditUri?.let { uri ->
+            PhotoEditOverlay(
+                uri = uri,
+                onDismiss = { pendingImageEditUri = null },
+                onApply = { rotationDegrees, cropRect ->
+                    val editedPath = ImageUtil.createEditedImage(
+                        context = context,
+                        uri = uri,
+                        rotationDegrees = rotationDegrees,
+                        cropRect = cropRect
+                    )
+                    if (editedPath != null) {
+                        submitEditedImageMessage(Uri.fromFile(File(editedPath)))
+                    } else {
+                        Toast.makeText(context, "图片裁剪失败", Toast.LENGTH_SHORT).show()
+                    }
+                    pendingImageEditUri = null
+                }
             )
         }
     }
@@ -619,6 +835,9 @@ private fun RecommendedQuestionBar(
 private fun AgentInputBar(
     value: String,
     onValueChange: (String) -> Unit,
+    pendingImageUri: Uri?,
+    onRemovePendingImage: () -> Unit,
+    isRecordingVoice: Boolean,
     attachmentsExpanded: Boolean,
     onToggleAttachments: () -> Unit,
     onSend: () -> Unit,
@@ -626,7 +845,17 @@ private fun AgentInputBar(
     onTakePhoto: () -> Unit,
     onChooseImage: () -> Unit
 ) {
-    val canSend = value.trim().isNotEmpty()
+    val canSend = value.trim().isNotEmpty() || pendingImageUri != null
+    val actionIcon = when {
+        isRecordingVoice -> Icons.Default.Stop
+        canSend -> Icons.AutoMirrored.Filled.Send
+        else -> Icons.Default.Mic
+    }
+    val actionDescription = when {
+        isRecordingVoice -> "结束录音"
+        canSend -> "发送"
+        else -> "语音输入"
+    }
 
     Column(
         modifier = Modifier
@@ -649,6 +878,14 @@ private fun AgentInputBar(
                 .border(1.dp, DividerSoft, RoundedCornerShape(28.dp))
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
+            pendingImageUri?.let { uri ->
+                PendingImagePreview(
+                    uri = uri,
+                    onRemove = onRemovePendingImage
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -657,7 +894,7 @@ private fun AgentInputBar(
             ) {
                 if (value.isEmpty()) {
                     Text(
-                        text = "发消息或按住说话",
+                        text = if (isRecordingVoice) "正在听你说话，再点一次结束" else "发消息或按住说话",
                         color = TextHint,
                         fontSize = 15.sp
                     )
@@ -694,12 +931,16 @@ private fun AgentInputBar(
                 )
                 Spacer(modifier = Modifier.size(10.dp))
                 RoundIconButton(
-                    icon = if (canSend) Icons.AutoMirrored.Filled.Send else Icons.Default.Mic,
-                    contentDescription = if (canSend) "发送" else "语音输入",
-                    backgroundColor = if (canSend) PurpleStart else Color(0xFFF8F6FC),
-                    iconColor = if (canSend) Color.White else TextSecondary,
+                    icon = actionIcon,
+                    contentDescription = actionDescription,
+                    backgroundColor = when {
+                        isRecordingVoice -> Color(0xFFE85D75)
+                        canSend -> PurpleStart
+                        else -> Color(0xFFF8F6FC)
+                    },
+                    iconColor = if (isRecordingVoice || canSend) Color.White else TextSecondary,
                     onClick = {
-                        if (canSend) {
+                        if (canSend && !isRecordingVoice) {
                             onSend()
                         } else {
                             onVoiceClick()
@@ -718,6 +959,44 @@ private fun AgentInputBar(
                     onChooseImage = onChooseImage
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PendingImagePreview(
+    uri: Uri,
+    onRemove: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(88.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(PurpleTint.copy(alpha = 0.72f))
+            .border(1.dp, Color.White.copy(alpha = 0.88f), RoundedCornerShape(18.dp))
+    ) {
+        AsyncImage(
+            model = uri,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(5.dp)
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.48f))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(15.dp)
+            )
         }
     }
 }

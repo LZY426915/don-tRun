@@ -41,6 +41,11 @@ android {
             "DEFAULT_QWEN_API_KEY",
             (localProperties.getProperty("youshu.qwen.apiKey") ?: "").toBuildConfigString()
         )
+        buildConfigField(
+            "String",
+            "DEFAULT_AMAP_WEB_API_KEY",
+            (localProperties.getProperty("youshu.amap.webApiKey") ?: "").toBuildConfigString()
+        )
     }
 
     buildTypes {

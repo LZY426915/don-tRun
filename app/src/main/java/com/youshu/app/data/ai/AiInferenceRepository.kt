@@ -1,5 +1,7 @@
 package com.youshu.app.data.ai
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import com.youshu.app.data.local.entity.AiModelConfig
 import com.youshu.app.data.local.entity.ItemDetail
@@ -22,7 +24,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,7 +34,12 @@ import javax.inject.Singleton
 class AiInferenceRepository @Inject constructor(
     private val aiModelRepository: AiModelRepository
 ) {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
+        .build()
     private val json = Json { ignoreUnknownKeys = true }
     private val mediaType = "application/json; charset=utf-8".toMediaType()
 
@@ -75,7 +84,7 @@ class AiInferenceRepository @Inject constructor(
             val config = requireConfig(AiModelConfig.PURPOSE_IMAGE_RECOGNITION)
             val imageFile = File(imagePath)
             require(imageFile.exists()) { "图片文件不存在" }
-            val imageBase64 = Base64.encodeToString(imageFile.readBytes(), Base64.NO_WRAP)
+            val imageBase64 = encodeImageForVision(imageFile)
             val content = chatCompletion(
                 config = config,
                 userContent = buildJsonArray {
@@ -111,6 +120,87 @@ class AiInferenceRepository @Inject constructor(
                 expireDays = obj["expireDays"]?.jsonPrimitive?.intOrNull,
                 note = obj["note"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
             )
+        }
+    }
+
+    suspend fun describeImageForAgent(
+        imagePath: String,
+        userQuestion: String?
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val config = requireConfig(AiModelConfig.PURPOSE_IMAGE_RECOGNITION)
+            val imageFile = File(imagePath)
+            require(imageFile.exists()) { "图片文件不存在" }
+            val imageBase64 = encodeImageForVision(imageFile)
+            chatCompletion(
+                config = config,
+                userContent = buildJsonArray {
+                    addText(
+                        """
+                        你是给家庭物品智能体提供图片理解结果的视觉模型。
+                        请根据图片识别画面中的主要物品、文字、状态、包装信息、环境位置和可能风险。
+                        用户的问题：${userQuestion?.takeIf { it.isNotBlank() } ?: "请看看这张图片"}
+
+                        输出要求：
+                        - 用中文自然语言列出要点，不要返回 JSON。
+                        - 看不清或无法确定的内容要明确说不确定。
+                        - 如果图片里是食品、药品、儿童用品、电器、清洁剂等，请特别说明可能需要注意的安全点。
+                        - 不要替用户做最终决定，只提供给后续文字智能体参考的图片事实和可见线索。
+                        """.trimIndent()
+                    )
+                    add(
+                        buildJsonObject {
+                            put("type", "image_url")
+                            putJsonObject("image_url") {
+                                put("url", "data:image/jpeg;base64,$imageBase64")
+                            }
+                        }
+                    )
+                }
+            )
+        }
+    }
+
+    suspend fun transcribeSpeech(
+        audioPath: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val config = requireConfig(AiModelConfig.PURPOSE_IMAGE_RECOGNITION)
+            val audioFile = File(audioPath)
+            require(audioFile.exists()) { "语音文件不存在" }
+            require(audioFile.length() > 44) { "录音太短，请再说一次" }
+            require(audioFile.length() <= MAX_ASR_AUDIO_BYTES) { "语音太长，请控制在 5 分钟以内" }
+
+            val audioBase64 = Base64.encodeToString(audioFile.readBytes(), Base64.NO_WRAP)
+            val body = buildJsonObject {
+                put("model", ASR_MODEL_NAME)
+                put("stream", false)
+                putJsonArray("messages") {
+                    add(
+                        buildJsonObject {
+                            put("role", "user")
+                            put("content", buildJsonArray {
+                                add(
+                                    buildJsonObject {
+                                        put("type", "input_audio")
+                                        putJsonObject("input_audio") {
+                                            put("data", "data:audio/wav;base64,$audioBase64")
+                                        }
+                                    }
+                                )
+                            })
+                        }
+                    )
+                }
+                putJsonObject("asr_options") {
+                    put("language", "zh")
+                    put("enable_itn", true)
+                }
+            }.toString().toRequestBody(mediaType)
+
+            executeChatRequest(config, body).trim()
+                .takeIf { it.isNotBlank() }
+                ?: error("语音没有识别出文字")
         }
     }
 
@@ -199,6 +289,53 @@ class AiInferenceRepository @Inject constructor(
         }
     }
 
+    private fun encodeImageForVision(
+        imageFile: File,
+        maxSide: Int = 1600,
+        quality: Int = 82
+    ): String {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(imageFile.absolutePath, bounds)
+        val sampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxSide)
+        val bitmap = BitmapFactory.decodeFile(
+            imageFile.absolutePath,
+            BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        ) ?: return Base64.encodeToString(imageFile.readBytes(), Base64.NO_WRAP)
+
+        val scaled = bitmap.scaleToMaxSide(maxSide)
+        val output = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(60, 95), output)
+        if (scaled != bitmap && !scaled.isRecycled) {
+            scaled.recycle()
+        }
+        if (!bitmap.isRecycled) {
+            bitmap.recycle()
+        }
+        return Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+    }
+
+    private fun calculateInSampleSize(width: Int, height: Int, maxSide: Int): Int {
+        if (width <= 0 || height <= 0 || maxSide <= 0) return 1
+        var sampleSize = 1
+        var sampledWidth = width
+        var sampledHeight = height
+        while (sampledWidth / 2 >= maxSide || sampledHeight / 2 >= maxSide) {
+            sampleSize *= 2
+            sampledWidth /= 2
+            sampledHeight /= 2
+        }
+        return sampleSize.coerceAtLeast(1)
+    }
+
+    private fun Bitmap.scaleToMaxSide(maxSide: Int): Bitmap {
+        val longSide = maxOf(width, height)
+        if (longSide <= maxSide || maxSide <= 0) return this
+        val scale = maxSide.toFloat() / longSide.toFloat()
+        val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+        val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
+    }
+
     private fun kotlinx.serialization.json.JsonArrayBuilder.addText(text: String) {
         add(
             buildJsonObject {
@@ -222,5 +359,10 @@ class AiInferenceRepository @Inject constructor(
         val end = lastIndexOf('}')
         require(start >= 0 && end > start) { "AI 返回内容不是 JSON" }
         return substring(start, end + 1)
+    }
+
+    private companion object {
+        const val ASR_MODEL_NAME = "qwen3-asr-flash"
+        const val MAX_ASR_AUDIO_BYTES = 10 * 1024 * 1024
     }
 }
