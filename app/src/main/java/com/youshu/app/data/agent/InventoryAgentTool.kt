@@ -33,6 +33,9 @@ class InventoryAgentTool @Inject constructor(
     @Volatile
     private var recentOperatedItemId: Long? = null
 
+    @Volatile
+    private var pendingDeleteLocationPath: String? = null
+
     // ──────────────────────────────────────────
     // 1. 关键词搜索物品
     // ──────────────────────────────────────────
@@ -366,10 +369,10 @@ class InventoryAgentTool @Inject constructor(
             }
         }
 
-        val rootText = if (createdRoot) {
-            "已添加场景“$sceneName”"
-        } else {
-            "“$sceneName”这个场景已经存在，我给它补充缺少的位置"
+        val rootText = when {
+            createdRoot -> "已添加场景“$sceneName”"
+            addedPaths.isNotEmpty() -> "已为“$sceneName”补全推荐位置"
+            else -> "“$sceneName”这个场景已经存在"
         }
         val addedText = if (addedPaths.isNotEmpty()) {
             "，并生成了：${addedPaths.joinToString("、")}"
@@ -405,6 +408,95 @@ class InventoryAgentTool @Inject constructor(
 
         locationDao.delete(location)
         return "已删除位置“${locationPath(location, locations)}”。"
+    }
+
+    suspend fun previewDeleteLocationTree(
+        name: String,
+        parentLocation: String
+    ): String {
+        val locations = locationDao.getAllLocationsSnapshot()
+        val location = resolveSingleLocation(name, locations, parentLocation.takeIf { it.isNotBlank() })
+            .getOrElse {
+                pendingDeleteLocationPath = null
+                return it.message.orEmpty()
+            }
+        val targetPath = locationPath(location, locations)
+        pendingDeleteLocationPath = targetPath
+
+        val descendants = collectLocationDescendants(location.id, locations)
+        val childLocations = locations
+            .filter { it.id in descendants && it.id != location.id }
+            .sortedBy { locationPath(it, locations) }
+        val items = itemDao.getAllItems().firstOrNull()
+            .orEmpty()
+            .filter { it.item.locationId in descendants }
+
+        val childText = if (childLocations.isEmpty()) {
+            "没有子位置"
+        } else {
+            childLocations
+                .take(PREVIEW_LIMIT)
+                .joinToString("、") { locationPath(it, locations) }
+                .let { text ->
+                    if (childLocations.size > PREVIEW_LIMIT) {
+                        "$text 等 ${childLocations.size} 个子位置"
+                    } else {
+                        "$text，共 ${childLocations.size} 个子位置"
+                    }
+                }
+        }
+        val itemText = if (items.isEmpty()) {
+            "没有物品"
+        } else {
+            items
+                .take(PREVIEW_LIMIT)
+                .joinToString("、") { detail ->
+                    "${detail.item.name}（${detail.locationName ?: "未设置位置"}）"
+                }
+                .let { text ->
+                    if (items.size > PREVIEW_LIMIT) {
+                        "$text 等 ${items.size} 件物品"
+                    } else {
+                        "$text，共 ${items.size} 件物品"
+                    }
+                }
+        }
+
+        return "准备删除位置/场景“$targetPath”。里面有：$childText；$itemText。删除后位置树会被移除，物品不会被删除，但这些物品的位置会变成未设置。确认删除吗？确认的话回复“确认删除”。"
+    }
+
+    suspend fun deleteLocationTree(
+        name: String,
+        parentLocation: String
+    ): String {
+        val requestedName = normalizeLocationPath(name)
+        val targetName = requestedName.ifBlank { pendingDeleteLocationPath.orEmpty() }
+        if (targetName.isBlank()) {
+            return "我还不知道你要删除哪个位置或场景。请先说“删除某某场景”，我会先列出里面的子位置和物品让你确认。"
+        }
+
+        val locations = locationDao.getAllLocationsSnapshot()
+        val location = resolveSingleLocation(targetName, locations, parentLocation.takeIf { it.isNotBlank() })
+            .getOrElse {
+                pendingDeleteLocationPath = null
+                return it.message.orEmpty()
+            }
+        val targetPath = locationPath(location, locations)
+        val pendingPath = pendingDeleteLocationPath
+        if (pendingPath == null || !targetPath.equals(pendingPath, ignoreCase = true)) {
+            pendingDeleteLocationPath = targetPath
+            return "为避免误删，我先确认一下：要删除的是“$targetPath”。请再回复“确认删除”，我再一次性删除它和下面的子位置。"
+        }
+
+        val descendants = collectLocationDescendants(location.id, locations)
+        val childCount = descendants.size - 1
+        val itemCount = itemDao.getAllItems().firstOrNull()
+            .orEmpty()
+            .count { it.item.locationId in descendants }
+
+        locationDao.delete(location)
+        pendingDeleteLocationPath = null
+        return "已删除位置树“$targetPath”，共删除 ${descendants.size} 个位置（包含 $childCount 个子位置）。这些位置里的 $itemCount 件物品没有删除，只是位置变成未设置。"
     }
 
     // ──────────────────────────────────────────
@@ -675,7 +767,7 @@ class InventoryAgentTool @Inject constructor(
 
         return singleOrFailure(
             candidates = candidates,
-            emptyMessage = "没有找到“$normalized”这个位置。",
+            emptyMessage = "当前没有找到“$normalized”这个位置或场景，可能之前已经删掉了。",
             ambiguousMessage = "找到多个相近位置：${candidates.joinToString("、") { locationPath(it, locations) }}。请说完整路径，比如“我的家 / 卧室 / 床头柜”。"
         )
     }
@@ -814,6 +906,7 @@ class InventoryAgentTool @Inject constructor(
 
     private fun cleanSceneName(value: String): String {
         return normalizeLocationPath(value)
+            .replace(Regex("^(帮我|请|麻烦你|给我|帮忙)?(添加|新增|创建|建立|加上)(一个|一处|新的|新)?"), "")
             .replace(Regex("(场景|大位置|地点|地方|区域)$"), "")
             .trim()
     }
@@ -835,6 +928,7 @@ class InventoryAgentTool @Inject constructor(
 
     companion object {
         private const val SEMANTIC_CANDIDATE_LIMIT = 120
+        private const val PREVIEW_LIMIT = 8
         private const val HOME_CANONICAL_NAME = "我的家"
         private val HOME_ROOT_NAMES = setOf(HOME_CANONICAL_NAME)
         private val HOME_ALIASES = setOf("家", "家里", "家中", "我家", "我的家", "家里面", "家里头")
