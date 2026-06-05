@@ -16,6 +16,10 @@ val localProperties = Properties().apply {
     }
 }
 
+val demoDeepSeekApiKey = "sk-a4f33c69fc6a4a04b7d0e10ce9e26662"
+val demoQwenApiKey = "sk-40e19a6c859b473fa1326785b09cf219"
+val demoAmapWebApiKey = "44a802a811250db3744d0a9e0113a38f"
+
 fun String.toBuildConfigString(): String {
     return "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
@@ -34,17 +38,17 @@ android {
         buildConfigField(
             "String",
             "DEFAULT_DEEPSEEK_API_KEY",
-            (localProperties.getProperty("youshu.deepseek.apiKey") ?: "").toBuildConfigString()
+            (localProperties.getProperty("youshu.deepseek.apiKey") ?: demoDeepSeekApiKey).toBuildConfigString()
         )
         buildConfigField(
             "String",
             "DEFAULT_QWEN_API_KEY",
-            (localProperties.getProperty("youshu.qwen.apiKey") ?: "").toBuildConfigString()
+            (localProperties.getProperty("youshu.qwen.apiKey") ?: demoQwenApiKey).toBuildConfigString()
         )
         buildConfigField(
             "String",
             "DEFAULT_AMAP_WEB_API_KEY",
-            (localProperties.getProperty("youshu.amap.webApiKey") ?: "").toBuildConfigString()
+            (localProperties.getProperty("youshu.amap.webApiKey") ?: demoAmapWebApiKey).toBuildConfigString()
         )
     }
 

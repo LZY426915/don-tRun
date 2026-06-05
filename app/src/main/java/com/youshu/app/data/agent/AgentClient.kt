@@ -81,7 +81,7 @@ class AgentClient @Inject constructor(
             for (round in 1..MAX_TOOL_ROUNDS) {
                 val toolCalls = extractToolCalls(currentResponse)
                 if (toolCalls.isEmpty()) {
-                    if (lastToolResults.isEmpty() && !retriedMissingTool && toolNudge != null) {
+                    if (lastToolResults.isEmpty() && !retriedMissingTool && toolNudge?.requiresToolCall == true) {
                         retriedMissingTool = true
                         currentResponse = executeApiCall(
                             config,
@@ -520,7 +520,7 @@ class AgentClient @Inject constructor(
                 requiresToolCall = true
                 "delete_item 或 preview_delete_location_tree。若用户要删的是物品，调用 delete_item；若用户要删的是位置/场景/宿舍/办公室/公司这类存放地点，先调用 preview_delete_location_tree 预览并让用户确认。"
             }
-            listOf("天气", "穿", "带伞", "防晒", "冷热").any { text.contains(it) } -> {
+            isWeatherQuestion(text) -> {
                 allowedToolNames = setOf("get_weather_context")
                 requiresToolCall = true
                 "get_weather_context。天气问题必须先调用本工具查询真实天气；拿到天气后，再调用 find_weather_items 查询建议物品位置，最后用自然中文回答。"
@@ -536,9 +536,10 @@ class AgentClient @Inject constructor(
                 requiresToolCall = true
                 "get_used_up_items。"
             }
-            listOf("在哪", "哪里", "有没有", "找", "查", "查看", "库存", "什么").any { text.contains(it) } -> {
+            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存").any { text.contains(it) } &&
+                !isUserLocationMetaQuestion(text) -> {
                 allowedToolNames = setOf("search_items", "find_related_items", "get_items_by_location")
-                requiresToolCall = true
+                requiresToolCall = false
                 "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么时调用 get_items_by_location。"
             }
             else -> return null
@@ -551,6 +552,26 @@ class AgentClient @Inject constructor(
             requiresToolCall = requiresToolCall,
             flow = if (allowedToolNames == setOf("get_weather_context")) ToolFlow.Weather else ToolFlow.Default
         )
+    }
+
+    private fun isWeatherQuestion(text: String): Boolean {
+        val compact = text.replace(Regex("\\s+"), "")
+        if (listOf("不知道我在哪", "不知道我在哪里", "怎么告诉我天气", "怎么知道我天气").any { compact.contains(it) }) {
+            return false
+        }
+        return listOf(
+            "天气", "穿什么", "穿啥", "怎么穿", "带伞", "带雨伞",
+            "防晒", "冷不冷", "热不热", "冷热", "适合出门", "会不会下雨"
+        ).any { compact.contains(it) }
+    }
+
+    private fun isUserLocationMetaQuestion(text: String): Boolean {
+        val compact = text.replace(Regex("\\s+"), "")
+        return listOf(
+            "我在哪", "我在哪里", "我住在哪", "我住在哪里",
+            "我在什么地方", "知道我在哪", "知道我在哪里",
+            "我的位置", "自动定位"
+        ).any { compact.contains(it) }
     }
 
     private fun shouldUseSceneTool(text: String): Boolean {
