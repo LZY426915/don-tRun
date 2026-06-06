@@ -1,251 +1,223 @@
-# 有数
+# 东西不跑
 
 <p align="center">
-  <img src="./image/readme/logo.png" alt="有数 Banner" width="35%" />
+  <img src="./app/src/main/res/drawable-nodpi/logo_mark_adaptive.png" alt="东西不跑应用图标" width="28%" />
+</p>
+
+<p align="center">
+  <strong>小东西帮你记住每一件物品</strong>
 </p>
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white" alt="Android" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Kotlin-2.1.0-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/minSdk-26-FF8A00" alt="minSdk 26" /></a>
-  <a href="https://github.com/gorkys/youshu/actions/workflows/android-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gorkys/youshu/android-ci.yml?branch=master&label=ci" alt="CI Status" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/minSdk-26-6A1B9A" alt="minSdk 26" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="License MIT" /></a>
 </p>
 
+“东西不跑”是一款面向家庭与宿舍场景的 Android 物品管理应用。它帮助用户记录物品放在哪里、还有多少、何时过期以及当前状态，并通过“小东西”智能体提供自然语言查询与管理能力。
 
-> 心中有数，遇事不怵。
-
-有数是一个面向家庭物品管理的 Android App，用来记录家中物品的位置、数量、有效期与状态，降低遗忘和浪费成本。项目重点围绕「拍照快速录入」「到期提醒」「分类与库房管理」「自然语言搜索入口」展开，并采用沉浸式页面与毛玻璃悬浮导航作为核心视觉语言。
-
----
-
-## 功能特点
-
-- 📸 拍照快速录入：从拍照到保存尽量压缩操作路径，适合高频、碎片化记录。
-- 🧠 AI 模型管理入口：预置模型别名、Provider、Endpoint、API Key 的管理表单，便于后续接入真实 AI 服务。
-- 🔎 搜索中心与库房：支持统一查看全部物品、已用完、待评价、已评价等状态。
-- 🗂 分类与位置双维度管理：可按物品分类或按存放位置浏览，并支持新增/删除。
-- ⏰ 到期提醒：基于 WorkManager 的本地到期通知，带重复提醒去重。
-- ♻️ 回收站：删除后进入回收站，30 天内可恢复，超期自动清理。
-- ⭐ 使用后评价：物品标记为已用完后支持星级评价，沉淀后续购买参考。
-- ✨ 沉浸式 UI：橙色渐变品牌体系、大圆角卡片、毛玻璃悬浮导航、移动端沉浸式顶部布局。
+本项目在开源项目框架基础上继续开发，完成了品牌与紫色视觉体系升级，并扩展了智能体、真实 AI 调用、天气查询、语音输入、图片理解、数据备份等能力。项目继续遵循并保留原项目的 MIT License。
 
 ---
 
-## 预览
+## 当前功能
 
-### 品牌展示
+### 物品管理
 
-<p align="center">
-  <img src="./image/readme/宣传图.png" alt="有数品牌展示" width="100%" />
-</p>
+- 拍照或跳过拍照快速录入物品。
+- 记录名称、图片、分类、存放位置、数量、有效期、价格和备注。
+- 查看物品详情，支持编辑、标记已用完、评价和删除。
+- 在首页按分类筛选最近添加的物品。
+- 在库房中搜索物品名称、分类、位置或备注。
+- 按全部、已用完、待评价、已评价等状态查看物品。
 
-### 当前页面能力
+### 分类、位置与生命周期
 
-- 首页：搜索入口、到期提醒、全部物品、最近添加、分类筛选。
-- 库房：按状态查看全部物品、已用完、待评价、已评价。
-- 分类：按分类 / 按位置切换，并查看对应物品列表。
-- 详情：左右滑动浏览、编辑、移入回收站、标记已用完、评分。
-- 我的：统计面板、AI 模型管理、到期提醒、回收站、设置等入口。
+- 按分类或存放位置两个维度浏览物品。
+- 支持新增、编辑和删除分类。
+- 支持创建多级存放位置，例如“宿舍 -> 衣柜 -> 下层”。
+- 删除物品后先进入回收站，30 天内可恢复。
+- 支持回收站批量恢复和永久删除。
+- 物品标记为已用完后，可进行星级评价并填写评价内容。
+
+### 到期提醒
+
+- 使用 WorkManager 约每 12 小时检查一次物品有效期。
+- 对未来 7 天内到期或已经过期的物品发送本地通知。
+- 对同一物品的相同提醒状态进行当天去重。
+- 可在“我的 -> 到期提醒”中集中查看需要关注的物品。
+
+### “小东西”智能体
+
+- 支持文字对话、语音输入、拍照和相册图片。
+- 可查询物品、分类、位置、库存状态和即将过期物品。
+- 可通过工具调用修改真实物品数据，并对高风险操作进行确认。
+- 支持图片理解与物品录入辅助。
+- 支持结合高德天气回答天气、出行和生活建议类问题。
+- 保存和搜索历史对话。
+
+### 设置与数据
+
+- 在“我的 -> API-Key 管理系统”中管理文字搜索、图片识别和天气服务配置。
+- 导出 ZIP 数据备份，并从 ZIP 备份恢复数据。
+- 检查新版本、下载并调起安装。
+- 使用 Room 在设备本地保存物品与配置数据。
+
+---
+
+## 当前视觉
+
+- 品牌主色为南大紫：`#6A1B9A` 到 `#9C27B0`。
+- 当前图标为紫色立体收纳盒与房屋，表达“物品有处可寻”。
+- 首页使用紫色渐变沉浸式顶部区域，并以“小东西”作为智能入口。
+- 主体使用淡紫白背景、白色大圆角卡片和紫色选中状态。
+- 底部使用毛玻璃悬浮导航，中间拍照按钮为主要操作入口。
+
+---
+
+## 页面入口
+
+| 页面 | 主要能力 |
+| --- | --- |
+| 首页 | 小东西入口、即将过期、全部物品、最近添加、分类筛选 |
+| 分类 | 按分类或位置浏览，管理分类与多级位置 |
+| 拍照 | 拍摄多张图片并进入物品录入 |
+| 库房 | 搜索物品，按状态筛选、编辑、用完、评价和删除 |
+| 我的 | 数据统计、API-Key 管理、到期提醒、回收站和设置 |
+| 小东西 | 文字、语音、图片对话与物品管理工具 |
 
 ---
 
 ## 技术栈
 
-- Kotlin
-- Jetpack Compose
+- Kotlin 2.1
+- Jetpack Compose + Material 3
 - Navigation Compose
+- MVVM
 - Room
 - Hilt
 - WorkManager
 - CameraX
 - Coil
+- Kotlin Coroutines
+- Kotlin Serialization
+- OkHttp
+- Haze 毛玻璃效果
+
+架构主链路：
+
+```text
+Compose UI -> ViewModel -> Repository / Agent Tool -> Room DB / External API
+```
 
 ---
 
 ## 项目结构
 
 ```text
-.
-├─ app/
-│  ├─ src/main/java/com/youshu/app
-│  │  ├─ data/
-│  │  │  ├─ local/          # Room 实体、DAO、数据库与迁移
-│  │  │  └─ repository/     # 数据仓库层
-│  │  ├─ di/                # Hilt 依赖注入
-│  │  ├─ ui/
-│  │  │  ├─ components/     # 通用 UI 组件
-│  │  │  ├─ navigation/     # 路由与导航
-│  │  │  ├─ screen/         # 页面实现
-│  │  │  └─ viewmodel/      # 状态与交互逻辑
-│  │  ├─ util/              # 通知、日期、图片等工具
-│  │  ├─ MainActivity.kt
-│  │  └─ YouShuApplication.kt
-│  └─ src/main/res/         # 图标、主题、字符串、图片资源
-├─ gradle/
-├─ you-shu-prd.md
-├─ 功能与样式.md
-└─ README.md
-```
-
-架构采用 MVVM：
-
-```text
-UI -> ViewModel -> Repository -> Room DB
+app/src/main/java/com/youshu/app/
+├─ data/
+│  ├─ agent/          # 小东西智能体、库存工具、天气工具与对话历史
+│  ├─ ai/             # 文字、图片与语音推理调用
+│  ├─ backup/         # ZIP 数据备份与恢复
+│  ├─ local/          # Room 实体、DAO、数据库与迁移
+│  ├─ repository/     # 数据仓库层
+│  └─ update/         # 版本检查、下载与安装
+├─ di/                # Hilt 依赖注入
+├─ ui/
+│  ├─ components/     # 通用 UI 与毛玻璃组件
+│  ├─ navigation/     # 路由与底部导航
+│  ├─ screen/         # 页面实现
+│  ├─ theme/          # 紫色视觉主题
+│  └─ viewmodel/      # 页面状态与交互逻辑
+├─ util/              # 到期通知、日期、图片和录音工具
+├─ MainActivity.kt
+└─ YouShuApplication.kt
 ```
 
 ---
 
-## 安装方法
+## 构建与安装
 
 ### 环境要求
 
 - Android Studio 最新稳定版
 - JDK 17
 - Android SDK 35
+- Android 8.0（API 26）及以上运行设备
 
-### 克隆项目
+### 构建 Debug APK
 
-```bash
-git clone https://github.com/gorkys/youshu.git
-cd youshu
-```
-
-### 同步与构建
+macOS / Linux：
 
 ```bash
-./gradlew assembleDebug
+./gradlew :app:assembleDebug
 ```
 
-Windows 可使用：
+Windows：
 
 ```powershell
-.\gradlew.bat assembleDebug
+.\gradlew.bat :app:assembleDebug
 ```
 
-如果你的依赖已经缓存完成，也可以离线构建：
+生成的 APK：
 
-```powershell
-.\gradlew.bat assembleDebug --offline
+```text
+app/build/outputs/apk/debug/app-debug.apk
 ```
 
----
-
-## 快速开始
-
-30 秒内跑起来的最短路径：
-
-```powershell
-git clone <your-repo-url>
-cd you-shu
-.\gradlew.bat assembleDebug
-```
-
-然后使用 Android Studio 运行 `app` 模块，或将生成的 APK 安装到设备：
+安装到已连接的 Android 设备：
 
 ```powershell
 adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-首次启动建议重点体验以下路径：
+---
 
-1. 首页 -> 搜索中心 / 全部物品 / 即将过期
-2. 底部中间拍照按钮 -> 快速录入 -> 保存
-3. 我的 -> AI 模型管理 / 回收站 / 到期提醒
+## 首次体验路径
+
+1. 进入“分类”，创建常用分类与存放位置。
+2. 点击底部中央拍照按钮，录入第一件物品。
+3. 进入“库房”，尝试搜索、标记已用完和评价。
+4. 进入“我的 -> 到期提醒 / 回收站”，查看生命周期管理能力。
+5. 从首页进入“小东西”，尝试询问“我的充电器放在哪里？”或“有哪些东西快过期了？”。
 
 ---
 
-## 配置 / API 参考
+## API-Key 配置
 
-本项目当前以本地功能为主，暂无真正对外开放的公网 API。和配置最相关的能力如下：
+进入“我的 -> API-Key 管理系统”，可编辑或新增不同用途的服务配置。
 
-| 配置项 | 位置 | 说明 |
+| 用途 | 当前预置服务 | 主要能力 |
 | --- | --- | --- |
-| `applicationId` | `app/build.gradle.kts` | 当前为 `com.youshu.app` |
-| `minSdk` / `targetSdk` | `app/build.gradle.kts` | 当前为 `26 / 35` |
-| AI 模型别名 | 我的 -> AI 模型管理 | 用于区分不同模型配置 |
-| Provider | 我的 -> AI 模型管理 | 例如 `OpenAI Compatible`、`Ollama` |
-| Endpoint | 我的 -> AI 模型管理 | 模型服务地址，例如 `https://api.example.com/v1` |
-| API Key | 我的 -> AI 模型管理 | 当前仅作为配置录入，尚未接入真实推理调用 |
-| 通知权限 | Android 13+ | 到期提醒依赖 `POST_NOTIFICATIONS` |
-| 相机权限 | 首次拍照时申请 | 拍照录入依赖 CameraX |
-| 本地数据库 | Room | 当前已包含评分字段与回收站软删除迁移 |
+| 文字搜索 | DeepSeek | 小东西对话、物品查询和管理工具调用 |
+| 图片识别 | 通义千问 Qwen | 图片理解与物品录入辅助 |
+| 天气服务 | 高德天气 | 天气查询与生活建议 |
 
-### 数据状态说明
-
-- `在用`：正常物品。
-- `已用完`：已消耗，可进入评价流程。
-- `已丢弃`：业务状态，区别于删除。
-- `回收站`：删除后进入软删除区，30 天内可恢复。
-
-### 到期提醒说明
-
-- 使用 WorkManager 周期检查。
-- 针对同一物品同一日期 / 状态做了提醒去重。
-- 依赖系统通知权限，未授权时不会发送通知。
+每项配置包含模型别名、模型来源、接口地址、模型名称和 API Key。API Key 属于敏感凭据，请勿提交到公开仓库或分享至公开材料。
 
 ---
 
-## 开发说明
+## 权限说明
 
-### UI / 交互方向
-
-- 顶部页面强调沉浸式布局，与系统状态栏衔接。
-- 底部导航采用毛玻璃悬浮样式，中间拍照按钮作为主操作入口。
-- 列表卡片、标签、弹窗、搜索框统一使用大圆角与暖橙色体系。
-
-### 最近完成的关键能力
-
-- 回收站与 30 天恢复
-- 库房状态筛选与详情联动
-- 详情页评价流程
-- Android 12+ Splash 链路收口为纯背景启动页
-- 图标资源链按 adaptive icon 规范拆分
+| 权限 | 用途 |
+| --- | --- |
+| 相机 | 拍照录入、智能体拍照发送图片 |
+| 麦克风 | 向小东西进行语音提问 |
+| 照片 / 媒体 | 从相册选择图片 |
+| 通知 | 展示物品到期提醒 |
+| 定位 | 为天气查询提供位置 |
+| 网络 | 智能体、图片识别、天气和检查更新 |
 
 ---
 
-## Contributing
+## 开源与致谢
 
-欢迎继续完善这个项目，建议按下面的方式参与：
+本项目基于原开源项目继续开发，并保留其 MIT License。感谢原作者和所有开源依赖的贡献者。
 
-1. Fork 仓库并新建分支。
-2. 保持最小必要改动，避免无关重构。
-3. 提交前至少完成一次本地构建验证：
-
-```bash
-./gradlew assembleDebug
-```
-
-4. Commit message 建议使用：
-
-```text
-feat: ...
-fix: ...
-refactor: ...
-docs: ...
-test: ...
-chore: ...
-```
-
-5. 如果变更涉及 UI，请附截图或录屏。
-6. 如果变更涉及数据库、通知、图标或导航，请在 PR 描述中明确风险边界。
-
----
-
-## Roadmap
-
-- [ ] 语音唤醒并识别对话内容创建物品收录
-- [ ] AI 接入
-- [ ] 接入真实 AI 识别与自然语言搜索
-- [ ] 增加更完整的设置中心
-- [x] 补充回收站批量恢复 / 永久删除能力
-- [ ] 增加 Demo GIF 或录屏视频
-- [x] 补充自动化测试与 CI
-
----
-## 社区支持
-问题反馈 / 讨论 → [Linux.do 社区](https://linux.do/)
+问题反馈 / 讨论：[Linux.do 社区](https://linux.do/)
 
 ## License
 
