@@ -117,7 +117,8 @@ Allowed purposes:
 
 - `vision`
 - `speech`
-- `text`
+
+Text-only inventory search parsing continues to use the DeepSeek route so provider behavior does not change during the security migration.
 
 ### 6.5 Amap
 
