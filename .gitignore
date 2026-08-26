@@ -26,3 +26,6 @@ UI草图.png
 # Local screenshots / references
 /image/screenshots/
 /image/references/
+
+# Local Codex worktrees
+/.worktrees/
