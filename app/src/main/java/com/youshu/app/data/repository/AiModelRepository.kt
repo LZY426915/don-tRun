@@ -1,6 +1,5 @@
 package com.youshu.app.data.repository
 
-import com.youshu.app.BuildConfig
 import com.youshu.app.data.local.dao.AiModelConfigDao
 import com.youshu.app.data.local.entity.AiModelConfig
 import kotlinx.coroutines.flow.Flow
@@ -13,15 +12,13 @@ class AiModelRepository @Inject constructor(
     private val aiModelConfigDao: AiModelConfigDao
 ) {
     fun getAllModels(): Flow<List<AiModelConfig>> =
-        aiModelConfigDao.getAllModels().map { models ->
-            models.map { it.withDefaultApiKey() }
-        }
+        aiModelConfigDao.getAllModels().map { models -> models.map { it.withoutApiKey() } }
 
     suspend fun getAllModelsSnapshot(): List<AiModelConfig> =
-        aiModelConfigDao.getAllModelsSnapshot().map { it.withDefaultApiKey() }
+        aiModelConfigDao.getAllModelsSnapshot().map { it.withoutApiKey() }
 
     suspend fun getPrimaryModelForPurpose(purpose: String): AiModelConfig? =
-        aiModelConfigDao.getPrimaryModelForPurpose(purpose)?.withDefaultApiKey()
+        aiModelConfigDao.getPrimaryModelForPurpose(purpose)?.withoutApiKey()
 
     suspend fun addModel(
         alias: String,
@@ -71,14 +68,6 @@ class AiModelRepository @Inject constructor(
 
     suspend fun deleteModel(id: Long) = aiModelConfigDao.deleteById(id)
 
-    private fun AiModelConfig.withDefaultApiKey(): AiModelConfig {
-        if (apiKey.isNotBlank()) return this
-        val defaultKey = when (purpose) {
-            AiModelConfig.PURPOSE_TEXT_SEARCH -> BuildConfig.DEFAULT_DEEPSEEK_API_KEY
-            AiModelConfig.PURPOSE_IMAGE_RECOGNITION -> BuildConfig.DEFAULT_QWEN_API_KEY
-            AiModelConfig.PURPOSE_WEATHER -> BuildConfig.DEFAULT_AMAP_WEB_API_KEY
-            else -> ""
-        }
-        return if (defaultKey.isBlank()) this else copy(apiKey = defaultKey)
-    }
+    private fun AiModelConfig.withoutApiKey(): AiModelConfig =
+        if (apiKey.isEmpty()) this else copy(apiKey = "")
 }

@@ -29,3 +29,9 @@ UI草图.png
 
 # Local Codex worktrees
 /.worktrees/
+
+# Secure API proxy local files
+/server/node_modules/
+/server/dist/
+/server/.env
+/server/*.zip

@@ -60,7 +60,7 @@
 
 ### 设置与数据
 
-- 在“我的 -> API-Key 管理系统”中管理文字搜索、图片识别和天气服务配置。
+- 在“我的 -> AI 服务状态”中查看文字、图片、语音和天气服务状态。
 - 导出 ZIP 数据备份，并从 ZIP 备份恢复数据。
 - 检查新版本、下载并调起安装。
 - 使用 Room 在设备本地保存物品与配置数据。
@@ -85,7 +85,7 @@
 | 分类 | 按分类或位置浏览，管理分类与多级位置 |
 | 拍照 | 拍摄多张图片并进入物品录入 |
 | 库房 | 搜索物品，按状态筛选、编辑、用完、评价和删除 |
-| 我的 | 数据统计、API-Key 管理、到期提醒、回收站和设置 |
+| 我的 | 数据统计、AI 服务状态、到期提醒、回收站和设置 |
 | 小东西 | 文字、语音、图片对话与物品管理工具 |
 
 ---
@@ -109,7 +109,7 @@
 架构主链路：
 
 ```text
-Compose UI -> ViewModel -> Repository / Agent Tool -> Room DB / External API
+Compose UI -> ViewModel -> Repository / Agent Tool -> Room DB / Secure Proxy -> External API
 ```
 
 ---
@@ -186,9 +186,9 @@ adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 
 ---
 
-## API-Key 配置
+## AI 服务与密钥安全
 
-进入“我的 -> API-Key 管理系统”，可编辑或新增不同用途的服务配置。
+Android 应用不保存、展示或直接发送任何第三方 API Key。应用通过阿里云函数计算中的固定代理路由访问服务，评委安装后无需注册，也无需手动填写密钥。
 
 | 用途 | 当前预置服务 | 主要能力 |
 | --- | --- | --- |
@@ -196,7 +196,7 @@ adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 | 图片识别 | 通义千问 Qwen | 图片理解与物品录入辅助 |
 | 天气服务 | 高德天气 | 天气查询与生活建议 |
 
-每项配置包含模型别名、模型来源、接口地址、模型名称和 API Key。API Key 属于敏感凭据，请勿提交到公开仓库或分享至公开材料。
+服务端部署方法、环境变量名称和验证步骤见 [`server/DEPLOY.md`](./server/DEPLOY.md)。真实密钥只应填写在函数计算环境变量中，绝不能写入 Git、Gradle 配置、APK、日志或公开材料。
 
 ---
 

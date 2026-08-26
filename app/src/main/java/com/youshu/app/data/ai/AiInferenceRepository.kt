@@ -3,9 +3,8 @@ package com.youshu.app.data.ai
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
-import com.youshu.app.data.local.entity.AiModelConfig
 import com.youshu.app.data.local.entity.ItemDetail
-import com.youshu.app.data.repository.AiModelRepository
+import com.youshu.app.data.network.BackendApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -20,39 +19,25 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class AiInferenceRepository @Inject constructor(
-    private val aiModelRepository: AiModelRepository
+    private val backendApiClient: BackendApiClient
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .callTimeout(90, TimeUnit.SECONDS)
-        .build()
     private val json = Json { ignoreUnknownKeys = true }
-    private val mediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun parseSearchQuery(
         query: String,
         items: List<ItemDetail>
     ): Result<AiSearchCriteria> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = requireConfig(AiModelConfig.PURPOSE_TEXT_SEARCH)
             val categories = items.mapNotNull { it.categoryName }.distinct().sorted()
             val locations = items.mapNotNull { it.locationName }.distinct().sorted()
             val content = textChatCompletion(
-                config = config,
                 userText = """
                 请把用户的物品搜索语句解析成 JSON，只返回 JSON。
                 可用分类：${categories.joinToString("、").ifBlank { "无" }}
@@ -81,12 +66,10 @@ class AiInferenceRepository @Inject constructor(
         locationNames: List<String>
     ): Result<AiImageRecognitionResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = requireConfig(AiModelConfig.PURPOSE_IMAGE_RECOGNITION)
             val imageFile = File(imagePath)
             require(imageFile.exists()) { "图片文件不存在" }
             val imageBase64 = encodeImageForVision(imageFile)
             val content = chatCompletion(
-                config = config,
                 userContent = buildJsonArray {
                     addText(
                         """
@@ -128,12 +111,10 @@ class AiInferenceRepository @Inject constructor(
         userQuestion: String?
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = requireConfig(AiModelConfig.PURPOSE_IMAGE_RECOGNITION)
             val imageFile = File(imagePath)
             require(imageFile.exists()) { "图片文件不存在" }
             val imageBase64 = encodeImageForVision(imageFile)
             chatCompletion(
-                config = config,
                 userContent = buildJsonArray {
                     addText(
                         """
@@ -165,7 +146,6 @@ class AiInferenceRepository @Inject constructor(
         audioPath: String
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = requireConfig(AiModelConfig.PURPOSE_IMAGE_RECOGNITION)
             val audioFile = File(audioPath)
             require(audioFile.exists()) { "语音文件不存在" }
             require(audioFile.length() > 44) { "录音太短，请再说一次" }
@@ -173,7 +153,6 @@ class AiInferenceRepository @Inject constructor(
 
             val audioBase64 = Base64.encodeToString(audioFile.readBytes(), Base64.NO_WRAP)
             val body = buildJsonObject {
-                put("model", ASR_MODEL_NAME)
                 put("stream", false)
                 putJsonArray("messages") {
                     add(
@@ -196,32 +175,18 @@ class AiInferenceRepository @Inject constructor(
                     put("language", "zh")
                     put("enable_itn", true)
                 }
-            }.toString().toRequestBody(mediaType)
+            }.toString()
 
-            executeChatRequest(config, body).trim()
+            executeChatRequest(QWEN_CHAT_PATH, body, PURPOSE_SPEECH).trim()
                 .takeIf { it.isNotBlank() }
                 ?: error("语音没有识别出文字")
         }
     }
 
-    private suspend fun requireConfig(purpose: String): AiModelConfig {
-        val config = aiModelRepository.getPrimaryModelForPurpose(purpose)
-            ?: error("请先在 API-Key 管理系统中配置${AiModelConfig.purposeLabel(purpose)}模型")
-        require(config.apiKey.isNotBlank()) {
-            "请先在 API-Key 管理系统中填写${AiModelConfig.purposeLabel(purpose)}的 API Key"
-        }
-        require(config.modelName.isNotBlank()) {
-            "请先在 API-Key 管理系统中填写${AiModelConfig.purposeLabel(purpose)}的模型名称"
-        }
-        return config
-    }
-
-    private fun textChatCompletion(
-        config: AiModelConfig,
+    private suspend fun textChatCompletion(
         userText: String
     ): String {
         val body = buildJsonObject {
-            put("model", config.modelName)
             put("stream", false)
             putJsonArray("messages") {
                 add(
@@ -231,17 +196,15 @@ class AiInferenceRepository @Inject constructor(
                     }
                 )
             }
-        }.toString().toRequestBody(mediaType)
+        }.toString()
 
-        return executeChatRequest(config, body)
+        return executeChatRequest(DEEPSEEK_CHAT_PATH, body)
     }
 
-    private fun chatCompletion(
-        config: AiModelConfig,
+    private suspend fun chatCompletion(
         userContent: kotlinx.serialization.json.JsonArray
     ): String {
         val body = buildJsonObject {
-            put("model", config.modelName)
             put("stream", false)
             putJsonArray("messages") {
                 add(
@@ -251,42 +214,29 @@ class AiInferenceRepository @Inject constructor(
                     }
                 )
             }
-        }.toString().toRequestBody(mediaType)
+        }.toString()
 
-        return executeChatRequest(config, body)
+        return executeChatRequest(QWEN_CHAT_PATH, body, PURPOSE_VISION)
     }
 
-    private fun executeChatRequest(
-        config: AiModelConfig,
-        body: okhttp3.RequestBody
+    private suspend fun executeChatRequest(
+        path: String,
+        body: String,
+        purpose: String? = null
     ): String {
-        val response = client.newCall(
-            Request.Builder()
-                .url(config.endpoint.chatCompletionsUrl())
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer ${config.apiKey}")
-                .post(body)
-                .build()
-        ).execute()
-
-        response.use {
-            if (!it.isSuccessful) {
-                error("AI 请求失败：HTTP ${it.code}")
-            }
-            val responseBody = it.body?.string().orEmpty()
-            val obj = json.parseToJsonElement(responseBody).jsonObject
-            return obj["choices"]
-                ?.jsonArray
-                ?.firstOrNull()
-                ?.jsonObject
-                ?.get("message")
-                ?.jsonObject
-                ?.get("content")
-                ?.jsonPrimitive
-                ?.contentOrNull
-                ?.takeIf { content -> content.isNotBlank() }
-                ?: error("AI 没有返回可用内容")
-        }
+        val responseBody = backendApiClient.postJson(path, body, purpose)
+        val obj = json.parseToJsonElement(responseBody).jsonObject
+        return obj["choices"]
+            ?.jsonArray
+            ?.firstOrNull()
+            ?.jsonObject
+            ?.get("message")
+            ?.jsonObject
+            ?.get("content")
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.takeIf { content -> content.isNotBlank() }
+            ?: error("AI 没有返回可用内容")
     }
 
     private fun encodeImageForVision(
@@ -345,15 +295,6 @@ class AiInferenceRepository @Inject constructor(
         )
     }
 
-    private fun String.chatCompletionsUrl(): String {
-        val normalized = trim().trimEnd('/')
-        return if (normalized.endsWith("/chat/completions")) {
-            normalized
-        } else {
-            "$normalized/chat/completions"
-        }
-    }
-
     private fun String.extractJsonObject(): String {
         val start = indexOf('{')
         val end = lastIndexOf('}')
@@ -362,7 +303,10 @@ class AiInferenceRepository @Inject constructor(
     }
 
     private companion object {
-        const val ASR_MODEL_NAME = "qwen3-asr-flash"
+        const val DEEPSEEK_CHAT_PATH = "/v1/deepseek/chat/completions"
+        const val QWEN_CHAT_PATH = "/v1/qwen/chat/completions"
+        const val PURPOSE_VISION = "vision"
+        const val PURPOSE_SPEECH = "speech"
         const val MAX_ASR_AUDIO_BYTES = 10 * 1024 * 1024
     }
 }

@@ -23,10 +23,8 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,7 +44,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.youshu.app.data.local.entity.AiModelConfig
 import com.youshu.app.ui.components.AppDecorativeBackground
 import com.youshu.app.ui.components.AppDialog
 import com.youshu.app.ui.components.AppSurfaceCard
@@ -73,16 +70,8 @@ fun ProfileScreen(
     val models by viewModel.aiModels.collectAsState()
 
     var showModelDialog by remember { mutableStateOf(false) }
-    var showAddModelDialog by remember { mutableStateOf(false) }
     var infoDialogTitle by remember { mutableStateOf<String?>(null) }
     var infoDialogMessage by remember { mutableStateOf<String?>(null) }
-    var newAlias by remember { mutableStateOf("") }
-    var newProvider by remember { mutableStateOf("") }
-    var newEndpoint by remember { mutableStateOf("") }
-    var newModelName by remember { mutableStateOf("") }
-    var newPurpose by remember { mutableStateOf(AiModelConfig.PURPOSE_TEXT_SEARCH) }
-    var newApiKey by remember { mutableStateOf("") }
-    var editingModelId by remember { mutableStateOf<Long?>(null) }
 
     Box {
         AppDecorativeBackground()
@@ -173,8 +162,8 @@ fun ProfileScreen(
             ) {
                 MenuRow(
                     icon = Icons.Default.AutoAwesome,
-                    title = "API-Key 管理系统",
-                    subtitle = "管理天气、AI 等第三方服务的 API Key",
+                    title = "AI 服务状态",
+                    subtitle = "DeepSeek、千问和高德服务由云端安全管理",
                     onClick = { showModelDialog = true }
                 )
                 DividerSpacer()
@@ -234,24 +223,15 @@ fun ProfileScreen(
 
     if (showModelDialog) {
         AppDialog(
-            title = "API-Key 管理系统",
-            subtitle = "管理各服务的连接信息与 API Key。",
+            title = "AI 服务状态",
+            subtitle = "访问凭证保存在云端，应用和安装包中不包含 API Key。",
             onDismissRequest = { showModelDialog = false },
-            confirmText = "新增模型",
-            onConfirm = {
-                editingModelId = null
-                newAlias = ""
-                newProvider = ""
-                newEndpoint = ""
-                newModelName = ""
-                newPurpose = AiModelConfig.PURPOSE_TEXT_SEARCH
-                newApiKey = ""
-                showAddModelDialog = true
-            }
+            confirmText = "关闭",
+            onConfirm = { showModelDialog = false }
         ) {
             if (models.isEmpty()) {
                 Text(
-                    text = "还没有添加模型。",
+                    text = "服务配置正在初始化。",
                     fontSize = 14.sp,
                     color = TextHint
                 )
@@ -268,113 +248,21 @@ fun ProfileScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "${model.provider} · ${model.endpoint}",
+                                text = model.provider,
                                 fontSize = 12.sp,
                                 color = TextHint
                             )
                             Text(
-                                text = "${AiModelConfig.purposeLabel(model.purpose)} · ${model.modelName}",
+                                text = "云端安全托管 · 已启用",
                                 fontSize = 12.sp,
                                 color = TextSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
-                            )
-                            Text(
-                                text = if (model.apiKey.isBlank()) "未配置 API Key" else "API Key: ${model.apiKey.take(4)}••••${model.apiKey.takeLast(2)}",
-                                fontSize = 12.sp,
-                                color = TextSecondary,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(PurpleStart.copy(alpha = 0.12f))
-                                .clickable {
-                                    editingModelId = model.id
-                                    newAlias = model.alias
-                                    newProvider = model.provider
-                                    newEndpoint = model.endpoint
-                                    newModelName = model.modelName
-                                    newPurpose = model.purpose
-                                    newApiKey = model.apiKey
-                                    showAddModelDialog = true
-                                }
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = "编辑",
-                                color = PurpleStart,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        Spacer(modifier = Modifier.size(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(StatusExpired.copy(alpha = 0.12f))
-                                .clickable { viewModel.deleteAiModel(model.id) }
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = "移除",
-                                color = StatusExpired,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
                 }
             }
         }
-    }
-
-    if (showAddModelDialog) {
-        AiModelEditorDialog(
-            title = if (editingModelId == null) "新增 API-Key" else "编辑 API-Key",
-            confirmText = if (editingModelId == null) "保存" else "更新",
-            alias = newAlias,
-            provider = newProvider,
-            endpoint = newEndpoint,
-            modelName = newModelName,
-            purpose = newPurpose,
-            apiKey = newApiKey,
-            onAliasChange = { newAlias = it },
-            onProviderChange = { newProvider = it },
-            onEndpointChange = { newEndpoint = it },
-            onModelNameChange = { newModelName = it },
-            onPurposeChange = { newPurpose = it },
-            onApiKeyChange = { newApiKey = it },
-            onDismissRequest = {
-                showAddModelDialog = false
-                editingModelId = null
-            },
-            onConfirm = {
-                val modelId = editingModelId
-                if (modelId == null) {
-                    viewModel.addAiModel(
-                        alias = newAlias,
-                        provider = newProvider,
-                        endpoint = newEndpoint,
-                        modelName = newModelName,
-                        purpose = newPurpose,
-                        apiKey = newApiKey
-                    )
-                } else {
-                    viewModel.updateAiModel(
-                        id = modelId,
-                        alias = newAlias,
-                        provider = newProvider,
-                        endpoint = newEndpoint,
-                        modelName = newModelName,
-                        purpose = newPurpose,
-                        apiKey = newApiKey
-                    )
-                }
-                showAddModelDialog = false
-                editingModelId = null
-            }
-        )
     }
 
     if (infoDialogTitle != null && infoDialogMessage != null) {
@@ -398,7 +286,6 @@ fun ProfileScreen(
         }
     }
 }
-
 @Composable
 private fun CompactStat(
     label: String,
@@ -480,123 +367,4 @@ private fun DividerSpacer() {
             .background(Color(0xFFF1EEF7))
             .height(1.dp)
     )
-}
-
-@Composable
-private fun AiModelEditorDialog(
-    title: String,
-    confirmText: String,
-    alias: String,
-    provider: String,
-    endpoint: String,
-    modelName: String,
-    purpose: String,
-    apiKey: String,
-    onAliasChange: (String) -> Unit,
-    onProviderChange: (String) -> Unit,
-    onEndpointChange: (String) -> Unit,
-    onModelNameChange: (String) -> Unit,
-    onPurposeChange: (String) -> Unit,
-    onApiKeyChange: (String) -> Unit,
-    onDismissRequest: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    AppDialog(
-        title = title,
-        subtitle = "先把必要连接信息录入，后续再接真实调用。",
-        onDismissRequest = onDismissRequest,
-        confirmText = confirmText,
-        confirmEnabled = alias.isNotBlank() &&
-            provider.isNotBlank() &&
-            endpoint.isNotBlank() &&
-            modelName.isNotBlank(),
-        onConfirm = onConfirm
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PurposeChip(
-                text = "文字搜索",
-                selected = purpose == AiModelConfig.PURPOSE_TEXT_SEARCH,
-                onClick = { onPurposeChange(AiModelConfig.PURPOSE_TEXT_SEARCH) },
-                modifier = Modifier.weight(1f)
-            )
-            PurposeChip(
-                text = "图片识别",
-                selected = purpose == AiModelConfig.PURPOSE_IMAGE_RECOGNITION,
-                onClick = { onPurposeChange(AiModelConfig.PURPOSE_IMAGE_RECOGNITION) },
-                modifier = Modifier.weight(1f)
-            )
-            PurposeChip(
-                text = "天气服务",
-                selected = purpose == AiModelConfig.PURPOSE_WEATHER,
-                onClick = { onPurposeChange(AiModelConfig.PURPOSE_WEATHER) },
-                modifier = Modifier.weight(1f)
-            )
-        }
-        OutlinedTextField(
-            value = alias,
-            onValueChange = onAliasChange,
-            singleLine = true,
-            label = { Text("模型别名") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = provider,
-            onValueChange = onProviderChange,
-            singleLine = true,
-            label = { Text("模型来源") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = endpoint,
-            onValueChange = onEndpointChange,
-            singleLine = true,
-            label = { Text("接口地址") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = modelName,
-            onValueChange = onModelNameChange,
-            singleLine = true,
-            label = { Text("模型名称") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = onApiKeyChange,
-            singleLine = true,
-            label = { Text("API Key") },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Key,
-                    contentDescription = null,
-                    tint = TextHint
-                )
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-
-@Composable
-private fun PurposeChip(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (selected) PurpleStart.copy(alpha = 0.16f) else Color(0xFFF8F6FC))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            color = if (selected) PurpleStart else TextSecondary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
 }

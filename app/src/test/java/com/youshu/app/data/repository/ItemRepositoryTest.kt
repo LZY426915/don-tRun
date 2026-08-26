@@ -99,6 +99,10 @@ private class FakeItemDao(
 
     override fun getItemsByLocation(locationId: Long): Flow<List<ItemDetail>> = flowOf(emptyList())
 
+    override fun getItemsByLocationName(locationName: String): Flow<List<ItemDetail>> = flowOf(emptyList())
+
+    override fun getItemsByCategoryName(categoryName: String): Flow<List<ItemDetail>> = flowOf(emptyList())
+
     override suspend fun getItemById(id: Long): Item? = items.firstOrNull { it.id == id && it.deletedAt == null }
 
     override suspend fun getAllItemsSnapshot(): List<Item> = snapshot()
@@ -133,15 +137,25 @@ private class FakeItemDao(
         items.replaceAll { item -> if (item.id == id) item.copy(status = status) else item }
     }
 
-    override suspend fun updateStatusAndRating(id: Long, status: Int, rating: Int?, ratedAt: Long?) {
+    override suspend fun updateStatusAndRating(
+        id: Long,
+        status: Int,
+        rating: Int?,
+        ratedAt: Long?,
+        reviewNote: String
+    ) {
         items.replaceAll { item ->
-            if (item.id == id) item.copy(status = status, rating = rating, ratedAt = ratedAt) else item
+            if (item.id == id) {
+                item.copy(status = status, rating = rating, ratedAt = ratedAt, reviewNote = reviewNote)
+            } else {
+                item
+            }
         }
     }
 
-    override suspend fun updateRating(id: Long, rating: Int, ratedAt: Long) {
+    override suspend fun updateRating(id: Long, rating: Int, ratedAt: Long, reviewNote: String) {
         items.replaceAll { item ->
-            if (item.id == id) item.copy(rating = rating, ratedAt = ratedAt) else item
+            if (item.id == id) item.copy(rating = rating, ratedAt = ratedAt, reviewNote = reviewNote) else item
         }
     }
 

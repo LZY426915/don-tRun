@@ -1,0 +1,15 @@
+{
+  "name": "youshu-api-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "pnpm run build && node --test dist/test/*.test.js",
+    "start": "node dist/src/app.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}

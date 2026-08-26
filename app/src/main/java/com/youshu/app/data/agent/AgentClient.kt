@@ -1,9 +1,8 @@
 package com.youshu.app.data.agent
 
-import com.youshu.app.data.local.entity.AiModelConfig
 import com.youshu.app.data.local.entity.Item
 import com.youshu.app.data.local.entity.ItemDetail
-import com.youshu.app.data.repository.AiModelRepository
+import com.youshu.app.data.network.BackendApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -18,29 +17,16 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class AgentClient @Inject constructor(
-    private val aiModelRepository: AiModelRepository,
+    private val backendApiClient: BackendApiClient,
     private val inventoryTool: InventoryAgentTool,
     private val weatherTool: WeatherAgentTool
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .callTimeout(90, TimeUnit.SECONDS)
-        .build()
-
     private val json = Json { ignoreUnknownKeys = true }
-    private val mediaType = "application/json; charset=utf-8".toMediaType()
 
     // ──────────────────────────────────────────
     // 公开方法
@@ -55,7 +41,6 @@ class AgentClient @Inject constructor(
         newMessage: String
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = requireConfig()
             val recentItemContext = inventoryTool.getRecentItemContext()
             val locationTreeContext = inventoryTool.getLocationTreeContext()
             val toolNudge = buildToolNudge(newMessage)
@@ -63,9 +48,7 @@ class AgentClient @Inject constructor(
 
             // 发送消息，带工具调用循环（最多 MAX_TOOL_ROUNDS 轮）
             var currentResponse = executeApiCall(
-                config,
                 buildRequestJson(
-                    config = config,
                     history = history,
                     newMessage = newMessage,
                     recentItemContext = recentItemContext,
@@ -84,9 +67,7 @@ class AgentClient @Inject constructor(
                     if (lastToolResults.isEmpty() && !retriedMissingTool && toolNudge?.requiresToolCall == true) {
                         retriedMissingTool = true
                         currentResponse = executeApiCall(
-                            config,
                             buildRequestJson(
-                                config = config,
                                 history = history,
                                 newMessage = newMessage,
                                 recentItemContext = recentItemContext,
@@ -111,9 +92,7 @@ class AgentClient @Inject constructor(
 
                 // 将工具结果送回 AI
                 currentResponse = executeApiCall(
-                    config,
                     buildToolResultRequest(
-                        config = config,
                         history = history,
                         newMessage = newMessage,
                         assistantMessage = extractMessageJson(currentResponse),
@@ -152,9 +131,7 @@ class AgentClient @Inject constructor(
         imageBase64: String
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = requireConfig()
             val body = buildJsonObject {
-                put("model", config.modelName)
                 put("stream", false)
                 putJsonArray("messages") {
                     addSystemPrompt()
@@ -183,9 +160,9 @@ class AgentClient @Inject constructor(
                         }
                     )
                 }
-            }.toString().toRequestBody(mediaType)
+            }.toString()
 
-            extractContent(executeApiCall(config, body))
+            extractContent(executeApiCall(body))
         }
     }
 
@@ -193,63 +170,8 @@ class AgentClient @Inject constructor(
     // 配置 & HTTP
     // ──────────────────────────────────────────
 
-    private suspend fun requireConfig(): AiModelConfig {
-        val config = aiModelRepository.getPrimaryModelForPurpose(AiModelConfig.PURPOSE_TEXT_SEARCH)
-            ?: error("请先在\"我的 → API-Key 管理系统\"中配置文字搜索模型")
-        require(config.apiKey.isNotBlank()) {
-            "请先在\"我的 → API-Key 管理系统\"中填写 DeepSeek 的 API Key"
-        }
-        require(config.modelName.isNotBlank()) {
-            "请先在\"我的 → API-Key 管理系统\"中填写模型名称"
-        }
-        return config
-    }
-
-    /**
-     * 执行 HTTP 请求，返回原始响应 JSON 字符串。
-     */
-    private fun executeApiCall(config: AiModelConfig, body: okhttp3.RequestBody): String {
-        val url = config.endpoint.chatCompletionsUrl()
-        val response = client.newCall(
-            Request.Builder()
-                .url(url)
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer ${config.apiKey}")
-                .post(body)
-                .build()
-        ).execute()
-
-        response.use {
-            if (!it.isSuccessful) {
-                val errorBody = it.body?.string().orEmpty()
-                val serverMessage = try {
-                    json.parseToJsonElement(errorBody).jsonObject["error"]
-                        ?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
-                } catch (_: Exception) { null }
-
-                val errorMsg = when (it.code) {
-                    401 -> "API Key 无效，请在\"我的 → API-Key 管理系统\"中检查密钥是否正确"
-                    402 -> "账户余额不足或计费异常，请检查 DeepSeek 控制台余额与 API 计费状态"
-                    403 -> "API Key 没有访问权限，请检查账户状态或联系 API 提供商"
-                    400, 422 -> serverMessage ?: "请求格式不符合 DeepSeek 接口要求"
-                    429 -> "请求过于频繁，请稍后重试"
-                    500, 502, 503, 504 -> "AI 服务暂时不可用，请稍后重试"
-                    else -> serverMessage ?: "HTTP ${it.code}"
-                }
-                error("AI 请求失败：$errorMsg")
-            }
-            return it.body?.string().orEmpty()
-        }
-    }
-
-    private fun String.chatCompletionsUrl(): String {
-        val normalized = trim().trimEnd('/')
-        return if (normalized.endsWith("/chat/completions")) {
-            normalized
-        } else {
-            "$normalized/chat/completions"
-        }
-    }
+    private suspend fun executeApiCall(body: String): String =
+        backendApiClient.postJson(DEEPSEEK_CHAT_PATH, body)
 
     // ──────────────────────────────────────────
     // 响应解析
@@ -299,7 +221,6 @@ class AgentClient @Inject constructor(
     // ──────────────────────────────────────────
 
     private fun buildRequestJson(
-        config: AiModelConfig,
         history: List<ChatMessage>,
         newMessage: String,
         recentItemContext: String?,
@@ -307,9 +228,8 @@ class AgentClient @Inject constructor(
         toolNudge: String?,
         allowedToolNames: Set<String>? = null,
         includeTools: Boolean
-    ): okhttp3.RequestBody {
+    ): String {
         return buildJsonObject {
-            put("model", config.modelName)
             put("stream", false)
             putJsonArray("messages") {
                 addSystemPrompt()
@@ -322,7 +242,7 @@ class AgentClient @Inject constructor(
             if (includeTools) {
                 put("tools", selectTools(allowedToolNames))
             }
-        }.toString().toRequestBody(mediaType)
+        }.toString()
     }
 
     /**
@@ -330,7 +250,6 @@ class AgentClient @Inject constructor(
      * [system, ...history, user, assistant(tool_calls), tool(result1), tool(result2), ...]
      */
     private fun buildToolResultRequest(
-        config: AiModelConfig,
         history: List<ChatMessage>,
         newMessage: String,
         assistantMessage: JsonObject,
@@ -340,9 +259,8 @@ class AgentClient @Inject constructor(
         toolNudge: String? = null,
         allowedToolNames: Set<String>? = null,
         includeTools: Boolean = true
-    ): okhttp3.RequestBody {
+    ): String {
         return buildJsonObject {
-            put("model", config.modelName)
             put("stream", false)
             putJsonArray("messages") {
                 addSystemPrompt()
@@ -367,7 +285,7 @@ class AgentClient @Inject constructor(
             if (includeTools) {
                 put("tools", selectTools(allowedToolNames))
             }
-        }.toString().toRequestBody(mediaType)
+        }.toString()
     }
 
     private fun selectTools(allowedToolNames: Set<String>?) = buildJsonArray {
@@ -1193,6 +1111,8 @@ class AgentClient @Inject constructor(
     // ──────────────────────────────────────────
 
     companion object {
+        private const val DEEPSEEK_CHAT_PATH = "/v1/deepseek/chat/completions"
+
         /** 工具调用最大轮数，防止无限循环 */
         private const val MAX_TOOL_ROUNDS = 3
 
