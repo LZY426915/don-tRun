@@ -191,12 +191,11 @@ class BackendApiClient internal constructor(
         val safeMessage = errorObject?.get("message")?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() }
             ?: defaultErrorMessage(statusCode)
-        val retryable = if (forceNotRetryable) {
-            false
-        } else {
-            errorObject?.get("retryable")?.jsonPrimitive?.booleanOrNull
-                ?: statusCode in setOf(429, 502, 503, 504)
-        }
+        val retryableStatus = statusCode in setOf(429, 502, 503, 504)
+        val retryable = !forceNotRetryable && (
+            retryableStatus ||
+                errorObject?.get("retryable")?.jsonPrimitive?.booleanOrNull == true
+            )
         val requestId = errorObject?.get("requestId")?.jsonPrimitive?.contentOrNull
         return BackendApiException(code, safeMessage, retryable, requestId)
     }
