@@ -1,5 +1,6 @@
 package com.youshu.app.data.agent
 
+import com.youshu.app.data.network.BackendApiException
 import com.youshu.app.data.network.BackendStreamEvent
 
 internal data class ToolCall(
@@ -18,6 +19,7 @@ internal class AgentStreamAssembler {
     private val text = StringBuilder()
     private val toolCalls = linkedMapOf<Int, MutableToolCall>()
     private var finishReason: String? = null
+    private var doneReceived = false
 
     val requiresVisibleTextReset: Boolean
         get() = text.isNotEmpty() && toolCalls.isNotEmpty()
@@ -31,7 +33,10 @@ internal class AgentStreamAssembler {
                 event.name?.let(call.name::append)
                 event.arguments?.let(call.arguments::append)
             }
-            is BackendStreamEvent.Done -> finishReason = event.finishReason
+            is BackendStreamEvent.Done -> {
+                doneReceived = true
+                finishReason = event.finishReason
+            }
         }
     }
 
@@ -46,6 +51,17 @@ internal class AgentStreamAssembler {
         },
         finishReason = finishReason
     )
+
+    fun buildCompletedRound(): AgentRound {
+        if (!doneReceived) {
+            throw BackendApiException(
+                code = "STREAM_INTERRUPTED",
+                safeMessage = "AI 回复在传输过程中中断了，请稍后重试。",
+                retryable = true
+            )
+        }
+        return buildRound()
+    }
 
     private class MutableToolCall {
         val id = StringBuilder()

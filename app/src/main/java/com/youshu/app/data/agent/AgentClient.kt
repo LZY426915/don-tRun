@@ -52,6 +52,7 @@ class AgentClient @Inject constructor(
         streamMessage(history, newMessage).collect { event ->
             when (event) {
                 is AgentReplyEvent.AppendText -> content.append(event.text)
+                is AgentReplyEvent.OperationCommitted -> Unit
                 AgentReplyEvent.ResetText -> content.clear()
                 AgentReplyEvent.Completed -> Unit
             }
@@ -132,13 +133,18 @@ class AgentClient @Inject constructor(
             }
 
             val toolResults = round.toolCalls.map { toolCall ->
-                val mutationKey = "${toolCall.name}:${toolCall.arguments}"
+                val mutationKey = toolCallIdentity(toolCall)
                 if (isMutationTool(toolCall.name) && mutationKey in executedMutations) {
                     toolCall to "该修改在本轮已经执行过，为避免重复写入，没有再次执行。"
                 } else {
                     val result = executeToolCall(toolCall, newMessage)
                     if (isMutationTool(toolCall.name)) executedMutations += mutationKey
                     toolCall to result
+                }
+            }
+            toolResults.forEach { (toolCall, result) ->
+                if (isMutationTool(toolCall.name) && isSuccessfulMutationResult(result)) {
+                    emit(AgentReplyEvent.OperationCommitted(formatToolResultForUser(toolCall, result)))
                 }
             }
             allToolResults += toolResults
@@ -258,7 +264,7 @@ class AgentClient @Inject constructor(
                 is BackendStreamEvent.Done -> Unit
             }
         }
-        return assembler.buildRound()
+        return assembler.buildCompletedRound()
     }
 
     private suspend fun emitFallback(
@@ -1067,7 +1073,6 @@ class AgentClient @Inject constructor(
             "add_location",
             "add_scene",
             "delete_location",
-            "preview_delete_location_tree",
             "delete_location_tree",
             "add_category",
             "delete_category"
@@ -1087,6 +1092,9 @@ class AgentClient @Inject constructor(
             "没找到",
             "不明确",
             "失败",
+            "没有再次执行",
+            "未执行",
+            "为避免重复",
             "请",
             "需要"
         ).any { result.contains(it) }

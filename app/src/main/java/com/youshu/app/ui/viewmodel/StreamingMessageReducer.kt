@@ -19,13 +19,24 @@ internal object StreamingMessageReducer {
         status = if (message.content.isBlank()) ChatMessageStatus.ERROR else ChatMessageStatus.NORMAL
     )
 
-    fun stop(message: ChatMessage): ChatMessage = message.copy(
-        content = message.content.ifBlank { "已停止生成。" },
-        status = ChatMessageStatus.STOPPED
-    )
+    fun stop(message: ChatMessage, operationSummary: String? = null): ChatMessage {
+        val partial = message.content.trimEnd()
+        val verifiedOperation = operationSummary?.trim().orEmpty()
+        val content = when {
+            verifiedOperation.isNotBlank() && partial.isNotBlank() ->
+                "$partial\n\n操作已完成：$verifiedOperation\n（已停止继续生成）"
+            verifiedOperation.isNotBlank() ->
+                "操作已完成：$verifiedOperation\n（已停止继续生成）"
+            partial.isNotBlank() -> partial
+            else -> "已停止生成。"
+        }
+        return message.copy(content = content, status = ChatMessageStatus.STOPPED)
+    }
 
-    fun fail(message: ChatMessage, safeMessage: String): ChatMessage = message.copy(
-        content = safeMessage.ifBlank { "小东西暂时没有连上 AI 服务，请稍后重试。" },
-        status = ChatMessageStatus.ERROR
-    )
+    fun fail(message: ChatMessage, safeMessage: String): ChatMessage {
+        val fallback = safeMessage.ifBlank { "小东西暂时没有连上 AI 服务，请稍后重试。" }
+        val partial = message.content.trimEnd()
+        val content = if (partial.isBlank()) fallback else "$partial\n\n（回复中断：$fallback）"
+        return message.copy(content = content, status = ChatMessageStatus.ERROR)
+    }
 }

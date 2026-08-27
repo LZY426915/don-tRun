@@ -28,5 +28,12 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("明天天气怎么样？"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加一个办公室场景"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("删除日用品分类"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("确认删除"))
+    }
+
+    @Test
+    fun route_doesNotForceAppToolsForUnrelatedContentEditing() {
+        assertEquals(AgentRoute.GENERAL, router.route("把这段文字删除"))
+        assertEquals(AgentRoute.GENERAL, router.route("请删除上一条消息"))
     }
 }

@@ -12,6 +12,8 @@ internal class AgentIntentRouter {
         if (text.isBlank()) return AgentRoute.GENERAL
         if (isUserLocationMetaQuestion(text)) return AgentRoute.GENERAL
         if (WEATHER_TERMS.any(text::contains)) return AgentRoute.TOOL_REQUIRED
+        if (isDeleteConfirmation(text)) return AgentRoute.TOOL_REQUIRED
+        if (isUnrelatedContentMutation(text)) return AgentRoute.GENERAL
         if (isExplicitMutation(text)) return AgentRoute.TOOL_REQUIRED
         if (isInventoryQuery(text)) return AgentRoute.TOOL_AUTO
         return AgentRoute.GENERAL
@@ -26,6 +28,30 @@ internal class AgentIntentRouter {
         val hasAppDomain = APP_DOMAIN_TERMS.any(text::contains)
         val looksLikeDirectCommand = COMMAND_PREFIXES.any(text::startsWith) || text.contains("帮我")
         return hasAppDomain || (looksLikeDirectCommand && !looksLikeGeneralHowTo(text))
+    }
+
+    private fun isDeleteConfirmation(text: String): Boolean = text in setOf(
+        "确认删除",
+        "确定删除",
+        "同意删除",
+        "可以删",
+        "删吧",
+        "都删了",
+        "继续删"
+    )
+
+    private fun isUnrelatedContentMutation(text: String): Boolean {
+        val hasMutation = MUTATION_TERMS.any(text::contains)
+        return hasMutation && listOf(
+            "文字",
+            "文本",
+            "段落",
+            "句子",
+            "消息",
+            "聊天记录",
+            "文件",
+            "文档"
+        ).any(text::contains)
     }
 
     private fun looksLikeGeneralHowTo(text: String): Boolean {

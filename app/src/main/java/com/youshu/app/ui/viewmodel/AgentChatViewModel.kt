@@ -44,6 +44,8 @@ class AgentChatViewModel @Inject constructor(
     private val _isReplying = MutableStateFlow(false)
     val isReplying: StateFlow<Boolean> = _isReplying.asStateFlow()
     private var replyJob: Job? = null
+    private var replyConversationId: String? = null
+    private val deletedConversationIds = mutableSetOf<String>()
 
     private val _isTranscribingVoice = MutableStateFlow(false)
     val isTranscribingVoice: StateFlow<Boolean> = _isTranscribingVoice.asStateFlow()
@@ -105,6 +107,10 @@ class AgentChatViewModel @Inject constructor(
     }
 
     fun deleteConversation(conversation: ChatConversation) {
+        if (replyConversationId == conversation.id) {
+            deletedConversationIds += conversation.id
+            replyJob?.cancel()
+        }
         viewModelScope.launch {
             ChatHistoryService.deleteConversation(context, conversation.id)
             val remaining = _conversations.value.filterNot { it.id == conversation.id }
@@ -149,8 +155,10 @@ class AgentChatViewModel @Inject constructor(
         var workingConversation = conversationWithUser.copy(
             messages = conversationWithUser.messages + assistantMessage
         )
+        val committedOperations = linkedSetOf<String>()
         _isReplying.value = true
         replaceConversation(workingConversation)
+        replyConversationId = current.id
 
         replyJob = viewModelScope.launch {
             try {
@@ -162,6 +170,10 @@ class AgentChatViewModel @Inject constructor(
                     assistantMessage = when (event) {
                         is AgentReplyEvent.AppendText ->
                             StreamingMessageReducer.append(assistantMessage, event.text)
+                        is AgentReplyEvent.OperationCommitted -> {
+                            committedOperations += event.summary
+                            assistantMessage
+                        }
                         AgentReplyEvent.ResetText ->
                             StreamingMessageReducer.reset(assistantMessage)
                         AgentReplyEvent.Completed -> assistantMessage
@@ -170,11 +182,14 @@ class AgentChatViewModel @Inject constructor(
                         workingConversation,
                         assistantMessage
                     )
-                    replaceConversation(workingConversation)
+                    replaceStreamingConversation(workingConversation)
                 }
                 assistantMessage = StreamingMessageReducer.complete(assistantMessage)
             } catch (_: CancellationException) {
-                assistantMessage = StreamingMessageReducer.stop(assistantMessage)
+                assistantMessage = StreamingMessageReducer.stop(
+                    assistantMessage,
+                    committedOperations.takeIf { it.isNotEmpty() }?.joinToString("；")
+                )
             } catch (error: Throwable) {
                 assistantMessage = StreamingMessageReducer.fail(
                     assistantMessage,
@@ -185,12 +200,18 @@ class AgentChatViewModel @Inject constructor(
                     workingConversation,
                     assistantMessage
                 ).copy(updatedAt = System.currentTimeMillis())
-                replaceConversation(workingConversation)
-                withContext(NonCancellable) {
-                    ChatHistoryService.saveConversation(context, workingConversation)
+                if (current.id !in deletedConversationIds) {
+                    val stillExists = replaceStreamingConversation(workingConversation)
+                    if (stillExists) {
+                        withContext(NonCancellable) {
+                            ChatHistoryService.saveConversation(context, workingConversation)
+                        }
+                    }
                 }
                 _isReplying.value = false
                 replyJob = null
+                replyConversationId = null
+                deletedConversationIds -= current.id
             }
         }
     }
@@ -227,8 +248,10 @@ class AgentChatViewModel @Inject constructor(
         var workingConversation = conversationWithImage.copy(
             messages = conversationWithImage.messages + assistantMessage
         )
+        val committedOperations = linkedSetOf<String>()
         _isReplying.value = true
         replaceConversation(workingConversation)
+        replyConversationId = current.id
 
         replyJob = viewModelScope.launch {
             try {
@@ -247,16 +270,23 @@ class AgentChatViewModel @Inject constructor(
                     assistantMessage = when (event) {
                         is AgentReplyEvent.AppendText ->
                             StreamingMessageReducer.append(assistantMessage, event.text)
+                        is AgentReplyEvent.OperationCommitted -> {
+                            committedOperations += event.summary
+                            assistantMessage
+                        }
                         AgentReplyEvent.ResetText ->
                             StreamingMessageReducer.reset(assistantMessage)
                         AgentReplyEvent.Completed -> assistantMessage
                     }
                     workingConversation = replaceMessage(workingConversation, assistantMessage)
-                    replaceConversation(workingConversation)
+                    replaceStreamingConversation(workingConversation)
                 }
                 assistantMessage = StreamingMessageReducer.complete(assistantMessage)
             } catch (_: CancellationException) {
-                assistantMessage = StreamingMessageReducer.stop(assistantMessage)
+                assistantMessage = StreamingMessageReducer.stop(
+                    assistantMessage,
+                    committedOperations.takeIf { it.isNotEmpty() }?.joinToString("；")
+                )
             } catch (error: Throwable) {
                 assistantMessage = StreamingMessageReducer.fail(
                     assistantMessage,
@@ -267,12 +297,18 @@ class AgentChatViewModel @Inject constructor(
                     workingConversation,
                     assistantMessage
                 ).copy(updatedAt = System.currentTimeMillis())
-                replaceConversation(workingConversation)
-                withContext(NonCancellable) {
-                    ChatHistoryService.saveConversation(context, workingConversation)
+                if (current.id !in deletedConversationIds) {
+                    val stillExists = replaceStreamingConversation(workingConversation)
+                    if (stillExists) {
+                        withContext(NonCancellable) {
+                            ChatHistoryService.saveConversation(context, workingConversation)
+                        }
+                    }
                 }
                 _isReplying.value = false
                 replyJob = null
+                replyConversationId = null
+                deletedConversationIds -= current.id
             }
         }
     }
@@ -427,6 +463,25 @@ class AgentChatViewModel @Inject constructor(
                 updated
             }
         }
+    }
+
+    private fun replaceStreamingConversation(conversation: ChatConversation): Boolean {
+        val trimmed = trimConversation(conversation)
+        val current = _conversations.value
+        val updated = StreamingConversationState.replaceExisting(current, trimmed)
+        if (updated == current && current.none { it.id == trimmed.id }) return false
+        _conversations.value = updated.take(MAX_CONVERSATIONS)
+        _activeConversation.value = StreamingConversationState.updateActive(
+            _activeConversation.value,
+            trimmed
+        )
+        return true
+    }
+
+    private fun trimConversation(conversation: ChatConversation): ChatConversation {
+        if (conversation.messages.size <= MAX_MESSAGES_PER_CONVERSATION) return conversation
+        val excess = conversation.messages.size - MAX_MESSAGES_PER_CONVERSATION
+        return conversation.copy(messages = conversation.messages.drop(excess))
     }
 
     /**

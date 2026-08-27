@@ -1,8 +1,10 @@
 package com.youshu.app.data.agent
 
 import com.youshu.app.data.network.BackendStreamEvent
+import com.youshu.app.data.network.BackendApiException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,5 +37,17 @@ class AgentStreamAssemblerTest {
 
         assertEquals("正常回答", assembler.buildRound().text)
         assertFalse(assembler.requiresVisibleTextReset)
+    }
+
+    @Test
+    fun buildCompletedRound_rejectsAStreamWithoutDone() {
+        val assembler = AgentStreamAssembler()
+        assembler.accept(BackendStreamEvent.TextDelta("只收到半截"))
+
+        val error = assertThrows(BackendApiException::class.java) {
+            assembler.buildCompletedRound()
+        }
+
+        assertEquals("STREAM_INTERRUPTED", error.code)
     }
 }
