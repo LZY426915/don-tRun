@@ -20,11 +20,11 @@ Compress-Archive -Path package.json,dist -DestinationPath youshu-api-proxy.zip -
 在阿里云函数计算控制台选择“创建函数”：
 
 - 函数名称：`youshu-api-proxy`
-- 运行环境：Node.js 20
+- 运行环境：自定义运行时 / Node.js / Node.js 20 / Debian 11
 - 函数类型：Web 函数 / HTTP 函数
 - 代码上传：上传 `youshu-api-proxy.zip`
 - 启动命令：`node dist/src/app.js`
-- 监听端口：保持平台默认；程序会读取 `FC_CUSTOM_LISTEN_PORT`
+- 监听端口：`9000`；程序会优先读取平台注入的 `FC_CUSTOM_LISTEN_PORT`
 - 内存：512 MB
 - 超时时间：120 秒
 - 公网访问：开启
@@ -39,8 +39,8 @@ DEEPSEEK_API_KEY=<新建的 DeepSeek Key>
 QWEN_API_KEY=<新建的百炼 Key>
 AMAP_WEB_API_KEY=<新建的高德 Web 服务 Key>
 SESSION_SIGNING_SECRET=<至少 32 位的随机字符串>
-DEEPSEEK_MODEL=deepseek-chat
-QWEN_VISION_MODEL=qwen3-vl-plus
+DEEPSEEK_MODEL=deepseek-v4-pro
+QWEN_VISION_MODEL=qwen3.7-plus
 QWEN_SPEECH_MODEL=qwen3-asr-flash
 ALLOWED_APP_VERSIONS=1.2.0
 ```
