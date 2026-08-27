@@ -2,8 +2,11 @@ package com.youshu.app.data.network
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -186,6 +189,41 @@ class BackendApiClientTest {
             .toList()
 
         assertEquals(listOf(BackendStreamEvent.TextDelta("先")), events)
+    }
+
+    @Test(timeout = 3_000)
+    fun postSse_externalCancellationInterruptsABlockedReadPromptly() = runBlocking {
+        store.saveSession("cached-token", Long.MAX_VALUE)
+        client = BackendApiClient(
+            baseUrl = server.url("/").toString(),
+            appVersion = "1.2.0",
+            sessionStore = store,
+            httpClient = OkHttpClient.Builder()
+                .readTimeout(1, TimeUnit.SECONDS)
+                .build(),
+            nowMillis = { 1_000L },
+            requestIdFactory = { "request-id" }
+        )
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBodyDelay(1, TimeUnit.SECONDS)
+                .setBody("event: done\ndata: {\"finishReason\":\"stop\"}\n\n")
+        )
+
+        val job = launch {
+            client.postSse("/v1/deepseek/chat/completions", """{"messages":[],"stream":true}""")
+                .toList()
+        }
+        server.takeRequest(1, TimeUnit.SECONDS)
+
+        val stoppedPromptly = withTimeoutOrNull(300) {
+            job.cancelAndJoin()
+            true
+        } ?: false
+        if (!stoppedPromptly) job.join()
+
+        assertTrue("cancel should close the blocked HTTP call immediately", stoppedPromptly)
     }
 
     private fun jsonResponse(body: String) = MockResponse()

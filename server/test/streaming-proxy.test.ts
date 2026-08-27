@@ -69,6 +69,20 @@ test("streaming route does not retry after a visible delta", async () => {
   });
 });
 
+test("streaming route reports a clean provider truncation as an error event", async () => {
+  const fetchImpl: typeof fetch = async () => providerSseResponse([
+    'data: {"choices":[{"delta":{"content":"半截回答"},"finish_reason":null}]}\n\n'
+  ]);
+
+  await withServer(fetchImpl, async ({ baseUrl, token }) => {
+    const response = await postStream(baseUrl, token);
+    const body = await response.text();
+    assert.match(body, /半截回答/);
+    assert.match(body, /event: error/);
+    assert.doesNotMatch(body, /event: done/);
+  });
+});
+
 test("closing the client stream aborts the provider request", async () => {
   let providerAborted = false;
   const fetchImpl: typeof fetch = async (_input, init) => {

@@ -75,6 +75,14 @@ export async function* parseProviderSse(
       for (const event of consumeLine(line)) yield event;
     }
     for (const event of dispatchFrame()) yield event;
+    if (!doneEmitted) {
+      throw new ApiError(
+        502,
+        "PROVIDER_STREAM_TRUNCATED",
+        "AI 服务返回了不完整的响应，请稍后重试。",
+        true
+      );
+    }
   } finally {
     reader.releaseLock();
   }

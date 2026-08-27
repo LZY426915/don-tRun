@@ -57,11 +57,12 @@ test("provider SSE joins repeated data lines and assembles tool fragments", asyn
   ]);
 });
 
-test("provider SSE flushes a final frame without a trailing blank line", async () => {
+test("provider SSE rejects a stream that closes without a terminal event", async () => {
   const source = 'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":null}]}'
-  assert.deepEqual(await collectEvents(byteStream([new TextEncoder().encode(source)])), [
-    { type: "text-delta", text: "完成" }
-  ]);
+  await assert.rejects(
+    collectEvents(byteStream([new TextEncoder().encode(source)])),
+    /AI 服务返回了不完整的响应/
+  );
 });
 
 test("normalized SSE encoder emits an event name and JSON payload", () => {
