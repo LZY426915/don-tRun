@@ -14,7 +14,10 @@ internal class AgentIntentRouter {
         if (WEATHER_TERMS.any(text::contains)) return AgentRoute.TOOL_REQUIRED
         if (isDeleteConfirmation(text)) return AgentRoute.TOOL_REQUIRED
         if (isRatingRequest(text)) {
-            return if (hasRecentItemContext || STRONG_APP_DOMAIN_TERMS.any(text::contains)) {
+            return if (
+                STRONG_APP_DOMAIN_TERMS.any(text::contains) ||
+                (hasRecentItemContext && refersToRecentItemForRating(text))
+            ) {
                 AgentRoute.TOOL_REQUIRED
             } else {
                 AgentRoute.TOOL_AUTO
@@ -39,6 +42,12 @@ internal class AgentIntentRouter {
     }
 
     private fun isRatingRequest(text: String): Boolean = RATING_REQUEST_REGEX.containsMatchIn(text)
+
+    private fun refersToRecentItemForRating(text: String): Boolean {
+        if (RECENT_ITEM_REFERENCES.any(text::contains)) return true
+        val command = POLITE_PREFIXES.fold(text) { current, prefix -> current.removePrefix(prefix) }
+        return BARE_RATING_PREFIXES.any(command::startsWith)
+    }
 
     private fun isDeleteConfirmation(text: String): Boolean {
         var normalized = text.trim(*CONFIRMATION_PUNCTUATION)
@@ -118,5 +127,14 @@ internal class AgentIntentRouter {
         val CONFIRMATION_PREFIXES = listOf("好的", "好", "嗯", "行")
         val CONFIRMATION_PUNCTUATION = charArrayOf('。', '！', '!', '？', '?', '，', ',', '；', ';')
         val RATING_REQUEST_REGEX = Regex("(?:给|打|评|写个)?[1-5一二三四五]星(?:评价|好评|[，,。！!；;]|$)")
+        val RECENT_ITEM_REFERENCES = listOf("它", "这个", "那个", "刚才", "刚刚", "上一个", "该物品", "这件物品")
+        val POLITE_PREFIXES = listOf("请", "帮我")
+        val BARE_RATING_PREFIXES = listOf(
+            "评分给", "评价给", "打1星", "打2星", "打3星", "打4星", "打5星",
+            "打一星", "打二星", "打三星", "打四星", "打五星", "评1星", "评2星",
+            "评3星", "评4星", "评5星", "评一星", "评二星", "评三星", "评四星",
+            "评五星", "1星", "2星", "3星", "4星", "5星", "一星", "二星", "三星",
+            "四星", "五星"
+        )
     }
 }

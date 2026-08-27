@@ -34,6 +34,15 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_AUTO, router.route("帮我评价农夫山泉，给5星"))
         assertEquals(AgentRoute.TOOL_AUTO, router.route("给农夫山泉写个5星评价"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("5星评价", hasRecentItemContext = true))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("给它打5星", hasRecentItemContext = true))
+        assertEquals(
+            AgentRoute.TOOL_AUTO,
+            router.route("帮我给电影《流浪地球》打5星评价", hasRecentItemContext = true)
+        )
+        assertEquals(
+            AgentRoute.TOOL_AUTO,
+            router.route("帮我评价农夫山泉，给5星", hasRecentItemContext = true)
+        )
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("确认删除"))
     }
 
