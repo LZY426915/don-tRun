@@ -116,6 +116,17 @@ and a final frame without an extra trailing newline.
 `AgentClient` exposes a streaming reply flow rather than returning only a final
 string.
 
+- General knowledge, reasoning, paradox, casual conversation, and advice questions
+  remain ordinary AI conversation. They must not be marked as errors merely because
+  no inventory tool was called.
+- Local intent hints may force a tool only when the message contains a
+  high-confidence app-data intent, such as an explicit inventory object, weather
+  request, or requested mutation of an item, category, or location. A broad word
+  such as "where", "what", "set", "delete", or "category" is not sufficient by
+  itself.
+- When intent is ambiguous, DeepSeek receives tools in automatic mode and may
+  answer normally or call a tool. Failure to call a tool is not an error unless a
+  confirmed app-data mutation would otherwise be falsely reported as completed.
 - Ordinary conversation streams text deltas immediately.
 - Requests identified as inventory, weather, or mutation work buffer model output
   while tool-call deltas are assembled.
@@ -178,6 +189,11 @@ Android tests cover:
 - SSE frames split at arbitrary byte boundaries.
 - Multi-line data, heartbeat, done, and error frames.
 - Text accumulation, reset behavior, and tool-call assembly.
+- General paradox and reasoning prompts do not force inventory tools or produce an
+  error solely because no tool was called. Regression prompts include the liar
+  paradox, the Ship of Theseus, and the omnipotence paradox.
+- Explicit inventory queries and mutations still select the required tools when
+  phrased naturally.
 - Stop-generation cancellation and partial-message preservation.
 - Final history persistence without per-token writes.
 
