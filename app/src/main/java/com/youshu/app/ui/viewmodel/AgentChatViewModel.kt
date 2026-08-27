@@ -5,20 +5,27 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.youshu.app.data.agent.AgentClient
+import com.youshu.app.data.agent.AgentReplyEvent
 import com.youshu.app.data.agent.ChatConversation
 import com.youshu.app.data.agent.ChatHistoryService
 import com.youshu.app.data.agent.ChatMessage
 import com.youshu.app.data.agent.ChatMessageStatus
 import com.youshu.app.data.ai.AiInferenceRepository
+import com.youshu.app.data.network.BackendApiException
 import com.youshu.app.util.ImageUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -36,6 +43,7 @@ class AgentChatViewModel @Inject constructor(
 
     private val _isReplying = MutableStateFlow(false)
     val isReplying: StateFlow<Boolean> = _isReplying.asStateFlow()
+    private var replyJob: Job? = null
 
     private val _isTranscribingVoice = MutableStateFlow(false)
     val isTranscribingVoice: StateFlow<Boolean> = _isTranscribingVoice.asStateFlow()
@@ -134,47 +142,61 @@ class AgentChatViewModel @Inject constructor(
             messages = current.messages + userMessage
         )
 
+        var assistantMessage = ChatHistoryService.createAssistantMessage(
+            content = "",
+            status = ChatMessageStatus.LOADING
+        )
+        var workingConversation = conversationWithUser.copy(
+            messages = conversationWithUser.messages + assistantMessage
+        )
         _isReplying.value = true
-        replaceConversation(conversationWithUser)
+        replaceConversation(workingConversation)
 
-        viewModelScope.launch {
-            // 持久化用户消息
-            ChatHistoryService.saveConversation(context, conversationWithUser)
-
-            // 调用真实 AI
-            val history = current.messages
-            val result = agentClient.sendMessage(
-                history = history,
-                newMessage = trimmed
-            )
-
-            val (replyContent, replyStatus) = result.fold(
-                onSuccess = { content -> content to ChatMessageStatus.NORMAL },
-                onFailure = { error ->
-                    val rawMessage = error.message.orEmpty()
-                    val friendlyMessage = when {
-                        rawMessage.contains("timeout", ignoreCase = true) ||
-                            rawMessage.contains("timed out", ignoreCase = true) ->
-                            "AI 请求超时了，可能是网络慢或 DeepSeek 响应慢，请稍后再试。"
-                        rawMessage.isNotBlank() -> rawMessage
-                        else -> "小东西暂时没有连上 AI 服务，请稍后重试。"
+        replyJob = viewModelScope.launch {
+            try {
+                ChatHistoryService.saveConversation(context, conversationWithUser)
+                agentClient.streamMessage(
+                    history = current.messages,
+                    newMessage = trimmed
+                ).collect { event ->
+                    assistantMessage = when (event) {
+                        is AgentReplyEvent.AppendText ->
+                            StreamingMessageReducer.append(assistantMessage, event.text)
+                        AgentReplyEvent.ResetText ->
+                            StreamingMessageReducer.reset(assistantMessage)
+                        AgentReplyEvent.Completed -> assistantMessage
                     }
-                    friendlyMessage to ChatMessageStatus.ERROR
+                    workingConversation = replaceMessage(
+                        workingConversation,
+                        assistantMessage
+                    )
+                    replaceConversation(workingConversation)
                 }
-            )
-
-            val assistantMessage = ChatHistoryService.createAssistantMessage(
-                content = replyContent,
-                status = replyStatus
-            )
-            val conversationWithAssistant = conversationWithUser.copy(
-                updatedAt = assistantMessage.createdAt,
-                messages = conversationWithUser.messages + assistantMessage
-            )
-            replaceConversation(conversationWithAssistant)
-            ChatHistoryService.saveConversation(context, conversationWithAssistant)
-            _isReplying.value = false
+                assistantMessage = StreamingMessageReducer.complete(assistantMessage)
+            } catch (_: CancellationException) {
+                assistantMessage = StreamingMessageReducer.stop(assistantMessage)
+            } catch (error: Throwable) {
+                assistantMessage = StreamingMessageReducer.fail(
+                    assistantMessage,
+                    friendlyReplyError(error)
+                )
+            } finally {
+                workingConversation = replaceMessage(
+                    workingConversation,
+                    assistantMessage
+                ).copy(updatedAt = System.currentTimeMillis())
+                replaceConversation(workingConversation)
+                withContext(NonCancellable) {
+                    ChatHistoryService.saveConversation(context, workingConversation)
+                }
+                _isReplying.value = false
+                replyJob = null
+            }
         }
+    }
+
+    fun stopGenerating() {
+        replyJob?.cancel()
     }
 
     fun submitImageMessage(imageUri: Uri, userQuestion: String?) {
@@ -198,54 +220,60 @@ class AgentChatViewModel @Inject constructor(
             messages = current.messages + userMessage
         )
 
+        var assistantMessage = ChatHistoryService.createAssistantMessage(
+            content = "",
+            status = ChatMessageStatus.LOADING
+        )
+        var workingConversation = conversationWithImage.copy(
+            messages = conversationWithImage.messages + assistantMessage
+        )
         _isReplying.value = true
-        replaceConversation(conversationWithImage)
+        replaceConversation(workingConversation)
 
-        viewModelScope.launch {
-            ChatHistoryService.saveConversation(context, conversationWithImage)
-
-            val visionResult = aiInferenceRepository.describeImageForAgent(
-                imagePath = imagePath,
-                userQuestion = question
-            )
-            val result = visionResult.fold(
-                onSuccess = { imageDescription ->
-                    agentClient.sendMessage(
-                        history = current.messages,
-                        newMessage = buildImageAgentPrompt(
-                            userQuestion = question,
-                            imageDescription = imageDescription
-                        )
+        replyJob = viewModelScope.launch {
+            try {
+                ChatHistoryService.saveConversation(context, conversationWithImage)
+                val imageDescription = aiInferenceRepository.describeImageForAgent(
+                    imagePath = imagePath,
+                    userQuestion = question
+                ).getOrThrow()
+                agentClient.streamMessage(
+                    history = current.messages,
+                    newMessage = buildImageAgentPrompt(
+                        userQuestion = question,
+                        imageDescription = imageDescription
                     )
-                },
-                onFailure = { error -> Result.failure(error) }
-            )
-            val (replyContent, replyStatus) = result.fold(
-                onSuccess = { content -> content to ChatMessageStatus.NORMAL },
-                onFailure = { error ->
-                    val rawMessage = error.message.orEmpty()
-                    val friendlyMessage = when {
-                        rawMessage.contains("timeout", ignoreCase = true) ||
-                            rawMessage.contains("timed out", ignoreCase = true) ->
-                            "图片识别或 AI 回复超时了，可能是网络慢，请稍后再试。"
-                        rawMessage.isNotBlank() -> rawMessage
-                        else -> "图片暂时没识别成功，请稍后再试。"
+                ).collect { event ->
+                    assistantMessage = when (event) {
+                        is AgentReplyEvent.AppendText ->
+                            StreamingMessageReducer.append(assistantMessage, event.text)
+                        AgentReplyEvent.ResetText ->
+                            StreamingMessageReducer.reset(assistantMessage)
+                        AgentReplyEvent.Completed -> assistantMessage
                     }
-                    friendlyMessage to ChatMessageStatus.ERROR
+                    workingConversation = replaceMessage(workingConversation, assistantMessage)
+                    replaceConversation(workingConversation)
                 }
-            )
-
-            val assistantMessage = ChatHistoryService.createAssistantMessage(
-                content = replyContent,
-                status = replyStatus
-            )
-            val conversationWithAssistant = conversationWithImage.copy(
-                updatedAt = assistantMessage.createdAt,
-                messages = conversationWithImage.messages + assistantMessage
-            )
-            replaceConversation(conversationWithAssistant)
-            ChatHistoryService.saveConversation(context, conversationWithAssistant)
-            _isReplying.value = false
+                assistantMessage = StreamingMessageReducer.complete(assistantMessage)
+            } catch (_: CancellationException) {
+                assistantMessage = StreamingMessageReducer.stop(assistantMessage)
+            } catch (error: Throwable) {
+                assistantMessage = StreamingMessageReducer.fail(
+                    assistantMessage,
+                    friendlyImageReplyError(error)
+                )
+            } finally {
+                workingConversation = replaceMessage(
+                    workingConversation,
+                    assistantMessage
+                ).copy(updatedAt = System.currentTimeMillis())
+                replaceConversation(workingConversation)
+                withContext(NonCancellable) {
+                    ChatHistoryService.saveConversation(context, workingConversation)
+                }
+                _isReplying.value = false
+                replyJob = null
+            }
         }
     }
 
@@ -311,6 +339,45 @@ class AgentChatViewModel @Inject constructor(
         )
         replaceConversation(updated)
         ChatHistoryService.saveConversation(context, updated)
+    }
+
+    private fun replaceMessage(
+        conversation: ChatConversation,
+        message: ChatMessage
+    ): ChatConversation = conversation.copy(
+        messages = conversation.messages.map { current ->
+            if (current.id == message.id) message else current
+        }
+    )
+
+    private fun friendlyReplyError(error: Throwable): String = when (error) {
+        is BackendApiException -> error.safeMessage
+        else -> {
+            val message = error.message.orEmpty()
+            if (
+                message.contains("timeout", ignoreCase = true) ||
+                message.contains("timed out", ignoreCase = true)
+            ) {
+                "AI 请求超时了，可能是网络慢或服务响应较慢，请稍后再试。"
+            } else {
+                "这次回答没能完成，请稍后重试。"
+            }
+        }
+    }
+
+    private fun friendlyImageReplyError(error: Throwable): String = when (error) {
+        is BackendApiException -> error.safeMessage
+        else -> {
+            val message = error.message.orEmpty()
+            if (
+                message.contains("timeout", ignoreCase = true) ||
+                message.contains("timed out", ignoreCase = true)
+            ) {
+                "图片识别或 AI 回复超时了，可能是网络慢，请稍后再试。"
+            } else {
+                "图片暂时没识别成功，请稍后再试。"
+            }
+        }
     }
 
     private fun resolveImagePath(uri: Uri): String? {

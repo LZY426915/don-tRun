@@ -18,7 +18,8 @@ enum class ChatRole {
 enum class ChatMessageStatus {
     NORMAL,
     LOADING,
-    ERROR
+    ERROR,
+    STOPPED
 }
 
 @Serializable

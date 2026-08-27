@@ -307,11 +307,11 @@ fun AgentChatScreen(
     }
 
     val messages = activeConversation?.messages.orEmpty()
-    val displayMessages = if (isReplying || isTranscribingVoice) {
+    val displayMessages = if (isTranscribingVoice) {
         messages + ChatMessage(
             id = "agent-loading-${activeConversation?.id.orEmpty()}",
             role = ChatRole.ASSISTANT,
-            content = if (isTranscribingVoice) "正在识别你的语音..." else "小东西正在整理答案...",
+            content = "正在识别你的语音...",
             createdAt = System.currentTimeMillis(),
             status = ChatMessageStatus.LOADING
         )
@@ -363,7 +363,13 @@ fun AgentChatScreen(
         attachmentsExpanded = false
     }
 
-    LaunchedEffect(displayMessages.size, activeConversation?.id, isReplying, isTranscribingVoice) {
+    LaunchedEffect(
+        displayMessages.size,
+        displayMessages.lastOrNull()?.content?.length,
+        activeConversation?.id,
+        isReplying,
+        isTranscribingVoice
+    ) {
         if (displayMessages.isNotEmpty()) {
             listState.animateScrollToItem(displayMessages.lastIndex)
         }
@@ -435,9 +441,11 @@ fun AgentChatScreen(
                 pendingImageUri = pendingAttachmentUri,
                 onRemovePendingImage = { pendingAttachmentUri = null },
                 isRecordingVoice = isRecordingVoice,
+                isReplying = isReplying,
                 attachmentsExpanded = attachmentsExpanded,
                 onToggleAttachments = { attachmentsExpanded = !attachmentsExpanded },
                 onSend = ::submitMessage,
+                onStopGenerating = viewModel::stopGenerating,
                 onVoiceClick = {
                     attachmentsExpanded = false
                     toggleVoiceRecording()
@@ -607,7 +615,7 @@ private fun ChatBubble(
                         ChatImagePreview(imageUri = imageUri)
                     }
 
-                    if (message.status == ChatMessageStatus.LOADING) {
+                    if (message.status == ChatMessageStatus.LOADING && message.content.isBlank()) {
                         LoadingMessageContent()
                     } else {
                         Text(
@@ -616,6 +624,13 @@ private fun ChatBubble(
                             fontSize = 15.sp,
                             lineHeight = 22.sp
                         )
+                        if (message.status == ChatMessageStatus.STOPPED) {
+                            Text(
+                                text = "已停止生成",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
 
                     if (message.itemCards.isNotEmpty()) {
@@ -838,9 +853,11 @@ private fun AgentInputBar(
     pendingImageUri: Uri?,
     onRemovePendingImage: () -> Unit,
     isRecordingVoice: Boolean,
+    isReplying: Boolean,
     attachmentsExpanded: Boolean,
     onToggleAttachments: () -> Unit,
     onSend: () -> Unit,
+    onStopGenerating: () -> Unit,
     onVoiceClick: () -> Unit,
     onTakePhoto: () -> Unit,
     onChooseImage: () -> Unit
@@ -848,11 +865,13 @@ private fun AgentInputBar(
     val canSend = value.trim().isNotEmpty() || pendingImageUri != null
     val actionIcon = when {
         isRecordingVoice -> Icons.Default.Stop
+        isReplying -> Icons.Default.Stop
         canSend -> Icons.AutoMirrored.Filled.Send
         else -> Icons.Default.Mic
     }
     val actionDescription = when {
         isRecordingVoice -> "结束录音"
+        isReplying -> "停止生成"
         canSend -> "发送"
         else -> "语音输入"
     }
@@ -935,12 +954,15 @@ private fun AgentInputBar(
                     contentDescription = actionDescription,
                     backgroundColor = when {
                         isRecordingVoice -> Color(0xFFE85D75)
+                        isReplying -> PurpleStart
                         canSend -> PurpleStart
                         else -> Color(0xFFF8F6FC)
                     },
-                    iconColor = if (isRecordingVoice || canSend) Color.White else TextSecondary,
+                    iconColor = if (isRecordingVoice || isReplying || canSend) Color.White else TextSecondary,
                     onClick = {
-                        if (canSend && !isRecordingVoice) {
+                        if (isReplying && !isRecordingVoice) {
+                            onStopGenerating()
+                        } else if (canSend && !isRecordingVoice) {
                             onSend()
                         } else {
                             onVoiceClick()
