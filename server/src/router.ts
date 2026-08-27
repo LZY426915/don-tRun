@@ -4,17 +4,18 @@ import { isIP } from "node:net";
 
 import { issueSession, verifySession } from "./auth.js";
 import type { ServerConfig } from "./config.js";
-import { ApiError } from "./errors.js";
+import { ApiError, toPublicError } from "./errors.js";
 import {
   bearerTokenFor,
   notFound,
   readJsonBody,
   requestIdFor,
   sendError,
-  sendJson
+  sendJson,
+  sendSseHeaders
 } from "./http.js";
 import { createRateLimiter, RATE_LIMITS } from "./limits.js";
-import { forwardDeepSeek } from "./providers/deepseek.js";
+import { forwardDeepSeek, openDeepSeekStream } from "./providers/deepseek.js";
 import { forwardQwen, type QwenPurpose } from "./providers/qwen.js";
 import {
   geocode,
@@ -26,6 +27,7 @@ import {
   type ReverseGeocodeInput,
   type WeatherInput
 } from "./providers/amap.js";
+import { encodeSseEvent, parseProviderSse } from "./sse.js";
 
 export interface RequestLogEntry {
   requestId: string;
@@ -96,6 +98,17 @@ export function createRouter(
         limiter.assertWithinLimit(`text:${installationHash}`, RATE_LIMITS.text);
         const parsed = await readJsonBody(request, 1024 * 1024);
         payloadSize = parsed.byteLength;
+        if (isRecord(parsed.value) && parsed.value.stream === true) {
+          await streamDeepSeekResponse(
+            request,
+            response,
+            parsed.value,
+            deps.config,
+            requestId,
+            fetchImpl
+          );
+          return;
+        }
         const providerResponse = await forwardDeepSeek(
           parsed.value,
           deps.config,
@@ -152,7 +165,9 @@ export function createRouter(
 
       throw notFound();
     } catch (error) {
-      sendError(response, error, requestId);
+      if (!response.destroyed && !response.headersSent) {
+        sendError(response, error, requestId);
+      }
     } finally {
       logger({
         requestId,
@@ -164,6 +179,87 @@ export function createRouter(
       });
     }
   };
+}
+
+async function streamDeepSeekResponse(
+  request: IncomingMessage,
+  response: ServerResponse,
+  body: Record<string, unknown>,
+  config: ServerConfig,
+  requestId: string,
+  fetchImpl: typeof fetch
+): Promise<void> {
+  const clientAbort = new AbortController();
+  const abortUpstream = () => clientAbort.abort();
+  response.once("close", abortUpstream);
+  let heartbeat: NodeJS.Timeout | undefined;
+
+  try {
+    const providerResponse = await openStreamWithRetry(
+      body,
+      config,
+      requestId,
+      clientAbort.signal,
+      fetchImpl
+    );
+    sendSseHeaders(response);
+    heartbeat = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) response.write(": keep-alive\n\n");
+    }, 15_000);
+
+    try {
+      for await (const event of parseProviderSse(providerResponse.body!)) {
+        if (clientAbort.signal.aborted || response.destroyed) return;
+        response.write(encodeSseEvent(event));
+      }
+      if (!response.writableEnded && !response.destroyed) response.end();
+    } catch (error) {
+      if (clientAbort.signal.aborted || response.destroyed) return;
+      const publicError = toPublicError(error, requestId).body.error;
+      response.write(encodeSseEvent({ type: "error", ...publicError }));
+      response.end();
+    }
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    response.off("close", abortUpstream);
+    clientAbort.abort();
+  }
+}
+
+async function openStreamWithRetry(
+  body: Record<string, unknown>,
+  config: ServerConfig,
+  requestId: string,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch
+): Promise<Response> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await openDeepSeekStream(body, config, requestId, signal, fetchImpl);
+    } catch (error) {
+      if (signal.aborted || attempt === 1 || !(error instanceof ApiError) || !error.retryable) {
+        throw error;
+      }
+      await abortableDelay(250, signal);
+    }
+  }
+  throw new ApiError(502, "PROVIDER_UNAVAILABLE", "AI 服务暂时不可用，请稍后重试。", true);
+}
+
+async function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw signal.reason;
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", cancel);
+      resolve();
+    };
+    const cancel = () => {
+      clearTimeout(timeout);
+      reject(signal.reason);
+    };
+    const timeout = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", cancel, { once: true });
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

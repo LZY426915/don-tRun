@@ -30,6 +30,16 @@ export function sendJson(
   response.end(json);
 }
 
+export function sendSseHeaders(response: ServerResponse): void {
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    "Transfer-Encoding": "chunked",
+    "X-Accel-Buffering": "no"
+  });
+  response.flushHeaders();
+}
+
 export function sendError(
   response: ServerResponse,
   error: unknown,
