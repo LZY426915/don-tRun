@@ -11,7 +11,14 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -51,6 +58,7 @@ class BackendApiClient internal constructor(
     )
 
     private val json = Json { ignoreUnknownKeys = true }
+    private val sseReader = BackendSseReader(json)
     private val sessionMutex = Mutex()
     private val normalizedBaseUrl = baseUrl.trim().trimEnd('/')
 
@@ -91,6 +99,47 @@ class BackendApiClient internal constructor(
                 )
             }
     }
+
+    fun postSse(
+        path: String,
+        body: String
+    ): Flow<BackendStreamEvent> = flow {
+        validatePath(path)
+        val firstSession = ensureSession()
+        var opened = openSse(path, body, firstSession.token)
+        if (opened.response.code == 401) {
+            opened.close()
+            sessionStore.clearSession()
+            val refreshedSession = ensureSession()
+            opened = openSse(path, body, refreshedSession.token)
+            if (opened.response.code == 401) {
+                opened.use {
+                    throw BackendResponse(
+                        it.response.code,
+                        it.response.body?.string().orEmpty()
+                    ).toException(forceNotRetryable = true)
+                }
+            }
+        }
+
+        opened.use {
+            if (!it.response.isSuccessful) {
+                throw BackendResponse(
+                    it.response.code,
+                    it.response.body?.string().orEmpty()
+                ).toException()
+            }
+            val responseBody = it.response.body ?: throw BackendApiException(
+                code = "INVALID_RESPONSE",
+                safeMessage = "服务返回的数据格式异常，请稍后重试。",
+                retryable = true
+            )
+            for (event in sseReader.read(responseBody.source())) emit(event)
+        }
+    }.catch { error ->
+        currentCoroutineContext().ensureActive()
+        throw mapNetworkError(error)
+    }.flowOn(Dispatchers.IO)
 
     private suspend fun ensureSession(): BackendSession = sessionMutex.withLock {
         sessionStore.readSession()
@@ -141,16 +190,7 @@ class BackendApiClient internal constructor(
         token: String?,
         purpose: String?
     ): BackendResponse {
-        val request = Request.Builder()
-            .url("$normalizedBaseUrl$path")
-            .header("Content-Type", JSON_MEDIA_TYPE.toString())
-            .header("X-Request-Id", requestIdFactory())
-            .apply {
-                token?.let { header("Authorization", "Bearer $it") }
-                purpose?.takeIf { it.isNotBlank() }?.let { header("X-YouShu-Purpose", it) }
-            }
-            .post(body.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        val request = buildRequest(path, body, token, purpose)
 
         return try {
             httpClient.newCall(request).execute().use { response ->
@@ -175,6 +215,66 @@ class BackendApiClient internal constructor(
                 cause = error
             )
         }
+    }
+
+    private suspend fun openSse(
+        path: String,
+        body: String,
+        token: String
+    ): OpenSseResponse {
+        val request = buildRequest(path, body, token, purpose = null, acceptSse = true)
+        val call = httpClient.newCall(request)
+        val cancellationHandle = currentCoroutineContext().job.invokeOnCompletion {
+            call.cancel()
+        }
+        return try {
+            OpenSseResponse(call.execute(), cancellationHandle)
+        } catch (error: Throwable) {
+            cancellationHandle.dispose()
+            currentCoroutineContext().ensureActive()
+            throw mapNetworkError(error)
+        }
+    }
+
+    private fun buildRequest(
+        path: String,
+        body: String,
+        token: String?,
+        purpose: String?,
+        acceptSse: Boolean = false
+    ): Request = Request.Builder()
+        .url("$normalizedBaseUrl$path")
+        .header("Content-Type", JSON_MEDIA_TYPE.toString())
+        .header("X-Request-Id", requestIdFactory())
+        .apply {
+            token?.let { header("Authorization", "Bearer $it") }
+            purpose?.takeIf { it.isNotBlank() }?.let { header("X-YouShu-Purpose", it) }
+            if (acceptSse) header("Accept", "text/event-stream")
+        }
+        .post(body.toRequestBody(JSON_MEDIA_TYPE))
+        .build()
+
+    private fun mapNetworkError(error: Throwable): BackendApiException = when (error) {
+        is BackendApiException -> error
+        is SocketTimeoutException -> BackendApiException(
+            code = "NETWORK_TIMEOUT",
+            safeMessage = "网络请求超时，请稍后重试。",
+            retryable = true,
+            cause = error
+        )
+        is UnknownHostException, is ConnectException -> offlineException(error)
+        is IOException -> BackendApiException(
+            code = "NETWORK_ERROR",
+            safeMessage = "网络连接失败，请稍后重试。",
+            retryable = true,
+            cause = error
+        )
+        else -> BackendApiException(
+            code = "NETWORK_ERROR",
+            safeMessage = "网络连接失败，请稍后重试。",
+            retryable = true,
+            cause = error
+        )
     }
 
     private fun BackendResponse.requireSuccess(): String {
@@ -240,6 +340,16 @@ class BackendApiClient internal constructor(
         val statusCode: Int,
         val body: String
     )
+
+    private class OpenSseResponse(
+        val response: okhttp3.Response,
+        private val cancellationHandle: kotlinx.coroutines.DisposableHandle
+    ) : AutoCloseable {
+        override fun close() {
+            response.close()
+            cancellationHandle.dispose()
+        }
+    }
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()

@@ -1,6 +1,9 @@
 package com.youshu.app.data.network
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -10,6 +13,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.TimeUnit
 
 class BackendApiClientTest {
     private lateinit var server: MockWebServer
@@ -100,6 +104,88 @@ class BackendApiClientTest {
         assertEquals("SESSION_EXPIRED", failure.code)
         assertFalse(failure.retryable)
         assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun postSse_attachesSessionAndEmitsChunkedEvents() = runTest {
+        store.saveSession("cached-token", Long.MAX_VALUE)
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setChunkedBody(
+                    """
+                    event: text-delta
+                    data: {"text":"你"}
+
+                    event: text-delta
+                    data: {"text":"好"}
+
+                    event: done
+                    data: {"finishReason":"stop"}
+
+                    """.trimIndent(),
+                    7
+                )
+        )
+
+        val events = client.postSse(
+            "/v1/deepseek/chat/completions",
+            """{"messages":[],"stream":true}"""
+        ).toList()
+
+        assertEquals(
+            listOf(
+                BackendStreamEvent.TextDelta("你"),
+                BackendStreamEvent.TextDelta("好"),
+                BackendStreamEvent.Done("stop")
+            ),
+            events
+        )
+        val request = server.takeRequest()
+        assertEquals("Bearer cached-token", request.getHeader("Authorization"))
+        assertEquals("text/event-stream", request.getHeader("Accept"))
+    }
+
+    @Test
+    fun postSse_refreshesOneExpiredSessionBeforeReadingStream() = runTest {
+        store.saveSession("expired-token", Long.MAX_VALUE)
+        server.enqueue(MockResponse().setResponseCode(401).setBody(expiredErrorJson))
+        server.enqueue(jsonResponse("""{"token":"new-token","expiresAt":9999999999999}"""))
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: done\ndata: {\"finishReason\":\"stop\"}\n\n")
+        )
+
+        assertEquals(
+            listOf(BackendStreamEvent.Done("stop")),
+            client.postSse("/v1/deepseek/chat/completions", """{"messages":[],"stream":true}""")
+                .toList()
+        )
+        assertEquals("Bearer expired-token", server.takeRequest().getHeader("Authorization"))
+        assertEquals("/v1/session", server.takeRequest().path)
+        assertEquals("Bearer new-token", server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test(timeout = 3_000)
+    fun postSse_cancellationStopsWaitingForLaterChunks() = runBlocking {
+        store.saveSession("cached-token", Long.MAX_VALUE)
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "event: text-delta\ndata: {\"text\":\"先\"}\n\n" +
+                        "event: text-delta\ndata: {\"text\":\"后\"}\n\n"
+                )
+                .throttleBody(8, 50, TimeUnit.MILLISECONDS)
+        )
+
+        val events = client.postSse("/v1/deepseek/chat/completions", """{"messages":[],"stream":true}""")
+            .take(1)
+            .toList()
+
+        assertEquals(listOf(BackendStreamEvent.TextDelta("先")), events)
     }
 
     private fun jsonResponse(body: String) = MockResponse()
