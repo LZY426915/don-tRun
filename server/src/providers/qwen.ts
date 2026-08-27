@@ -11,7 +11,13 @@ export async function forwardQwen(
   fetchImpl: typeof fetch = fetch
 ): Promise<ProviderResponse> {
   const model = purpose === "vision" ? config.qwenVisionModel : config.qwenSpeechModel;
-  const requestBody = buildChatRequest(body, model);
+  const requestBody = buildChatRequest(
+    body,
+    model,
+    purpose === "vision"
+      ? { stream: false, trustedOverrides: { enable_thinking: false } }
+      : { stream: false }
+  );
   return callJsonProvider(
     `${config.qwenBaseUrl}/chat/completions`,
     config.qwenApiKey,

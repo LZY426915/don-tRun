@@ -7,7 +7,10 @@ export async function forwardDeepSeek(
   requestId: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<ProviderResponse> {
-  const requestBody = buildChatRequest(body, config.deepseekModel);
+  const requestBody = buildChatRequest(body, config.deepseekModel, {
+    stream: false,
+    trustedOverrides: { thinking: { type: "disabled" } }
+  });
   return callJsonProvider(
     `${config.deepseekBaseUrl}/chat/completions`,
     config.deepseekApiKey,

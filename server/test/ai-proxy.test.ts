@@ -36,6 +36,7 @@ test("DeepSeek proxy overwrites model and authorization while preserving tool ca
   assert.equal(recorder.lastHeaders["x-request-id"], "req-1");
   assert.equal(recorder.lastJson?.model, config.deepseekModel);
   assert.equal(recorder.lastJson?.stream, false);
+  assert.deepEqual(recorder.lastJson?.thinking, { type: "disabled" });
   assert.deepEqual(recorder.lastJson?.tools, tools);
   assert.equal("unapproved" in (recorder.lastJson ?? {}), false);
   assert.deepEqual(result, { status: 200, body: toolCallResponse });
@@ -80,6 +81,7 @@ test("Qwen purpose selects only the configured model and preserves multimodal me
   assert.equal(recorder.lastUrl?.toString(), "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
   assert.equal(recorder.lastJson?.model, config.qwenVisionModel);
   assert.deepEqual(recorder.lastJson?.messages, messages);
+  assert.equal(recorder.lastJson?.enable_thinking, false);
 });
 
 test("Qwen speech purpose selects the speech model", async () => {
@@ -89,21 +91,33 @@ test("Qwen speech purpose selects the speech model", async () => {
   await forwardQwen("speech", { messages: [] }, config, "req-5", recorder.fetch);
 
   assert.equal(recorder.lastJson?.model, config.qwenSpeechModel);
+  assert.equal("enable_thinking" in (recorder.lastJson ?? {}), false);
 });
 
-test("provider authentication and billing failures are mapped to a safe error", async () => {
-  const recorder = recordingFetch(jsonResponse({ message: "sensitive upstream detail" }, 401));
+for (const expected of [
+  { upstream: 400, status: 503, code: "PROVIDER_CONFIGURATION_ERROR", retryable: false },
+  { upstream: 401, status: 503, code: "PROVIDER_CREDENTIALS_INVALID", retryable: false },
+  { upstream: 403, status: 503, code: "PROVIDER_CREDENTIALS_INVALID", retryable: false },
+  { upstream: 429, status: 429, code: "PROVIDER_RATE_LIMITED", retryable: true },
+  { upstream: 500, status: 502, code: "PROVIDER_UNAVAILABLE", retryable: true }
+]) {
+  test(`provider status ${expected.upstream} is mapped to a safe error`, async () => {
+    const recorder = recordingFetch(
+      jsonResponse({ message: "sensitive upstream detail" }, expected.upstream)
+    );
 
-  await assert.rejects(
-    () => forwardDeepSeek({ messages: [] }, validConfig(), "req-6", recorder.fetch),
-    (error: unknown) => {
-      assert.equal((error as { status: number }).status, 502);
-      assert.equal((error as { code: string }).code, "PROVIDER_UNAVAILABLE");
-      assert.equal(String(error).includes("sensitive upstream detail"), false);
-      return true;
-    }
-  );
-});
+    await assert.rejects(
+      () => forwardDeepSeek({ messages: [] }, validConfig(), "req-6", recorder.fetch),
+      (error: unknown) => {
+        assert.equal((error as { status: number }).status, expected.status);
+        assert.equal((error as { code: string }).code, expected.code);
+        assert.equal((error as { retryable: boolean }).retryable, expected.retryable);
+        assert.equal(String(error).includes("sensitive upstream detail"), false);
+        return true;
+      }
+    );
+  });
+}
 
 test("authenticated AI routes use the fixed providers and require a Qwen purpose", async () => {
   const recorder = recordingFetch(jsonResponse({ choices: [] }));

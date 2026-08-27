@@ -1,4 +1,5 @@
 import { ApiError } from "../errors.js";
+import { providerErrorFor } from "./provider-errors.js";
 
 export interface ProviderResponse {
   status: number;
@@ -14,12 +15,21 @@ const ALLOWED_CHAT_FIELDS = [
   "max_tokens"
 ] as const;
 
-export function buildChatRequest(body: unknown, model: string): Record<string, unknown> {
+export interface ChatRequestOptions {
+  stream: boolean;
+  trustedOverrides?: Record<string, unknown>;
+}
+
+export function buildChatRequest(
+  body: unknown,
+  model: string,
+  options: ChatRequestOptions = { stream: false }
+): Record<string, unknown> {
   if (!isRecord(body) || !Array.isArray(body.messages)) {
     throw invalidRequest("messages must be an array.");
   }
-  if (body.stream !== undefined && body.stream !== false) {
-    throw invalidRequest("Streaming responses are not supported.");
+  if (body.stream !== undefined && body.stream !== options.stream) {
+    throw invalidRequest(`stream must be ${options.stream}.`);
   }
   if (!body.messages.every(isRecord)) {
     throw invalidRequest("Each message must be an object.");
@@ -56,7 +66,10 @@ export function buildChatRequest(body: unknown, model: string): Record<string, u
     }
   }
   accepted.model = model;
-  accepted.stream = false;
+  accepted.stream = options.stream;
+  for (const [key, value] of Object.entries(options.trustedOverrides ?? {})) {
+    accepted[key] = cloneJson(value);
+  }
   return accepted;
 }
 
@@ -89,12 +102,7 @@ export async function callJsonProvider(
   }
 
   if (!response.ok) {
-    throw new ApiError(
-      502,
-      "PROVIDER_UNAVAILABLE",
-      "The AI service is temporarily unavailable.",
-      response.status >= 500 || response.status === 429
-    );
+    throw providerErrorFor(response.status);
   }
 
   try {
