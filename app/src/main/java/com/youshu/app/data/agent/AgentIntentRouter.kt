@@ -7,12 +7,19 @@ enum class AgentRoute {
 }
 
 internal class AgentIntentRouter {
-    fun route(message: String): AgentRoute {
+    fun route(message: String, hasRecentItemContext: Boolean = false): AgentRoute {
         val text = message.replace(Regex("\\s+"), "").trim()
         if (text.isBlank()) return AgentRoute.GENERAL
         if (isUserLocationMetaQuestion(text)) return AgentRoute.GENERAL
         if (WEATHER_TERMS.any(text::contains)) return AgentRoute.TOOL_REQUIRED
         if (isDeleteConfirmation(text)) return AgentRoute.TOOL_REQUIRED
+        if (isRatingRequest(text)) {
+            return if (hasRecentItemContext || STRONG_APP_DOMAIN_TERMS.any(text::contains)) {
+                AgentRoute.TOOL_REQUIRED
+            } else {
+                AgentRoute.TOOL_AUTO
+            }
+        }
         if (isExplicitMutation(text)) return AgentRoute.TOOL_REQUIRED
         if (isUnrelatedContentMutation(text)) return AgentRoute.GENERAL
         if (isInventoryQuery(text)) return AgentRoute.TOOL_AUTO
@@ -20,8 +27,6 @@ internal class AgentIntentRouter {
     }
 
     private fun isExplicitMutation(text: String): Boolean {
-        if (REVIEW_TERMS.any(text::contains) && text.contains("星")) return true
-
         val hasMutation = MUTATION_TERMS.any(text::contains)
         if (!hasMutation) return false
 
@@ -32,6 +37,8 @@ internal class AgentIntentRouter {
             UNRELATED_TARGET_TERMS.none(text::contains)
         return changesKnownScene
     }
+
+    private fun isRatingRequest(text: String): Boolean = RATING_REQUEST_REGEX.containsMatchIn(text)
 
     private fun isDeleteConfirmation(text: String): Boolean {
         var normalized = text.trim(*CONFIRMATION_PUNCTUATION)
@@ -87,7 +94,6 @@ internal class AgentIntentRouter {
             "添加", "新增", "创建", "建立", "加上", "删除", "删掉", "移除",
             "标记", "改成", "设置", "设为", "确认删除"
         )
-        val REVIEW_TERMS = listOf("评价", "评分", "好评", "评五星", "打五星")
         val STATUS_TERMS = listOf("用完", "没用完", "未用完", "丢弃", "废弃")
         val STATUS_MUTATION_TERMS = listOf("标记", "改成", "设置", "设为")
         val STRONG_APP_DOMAIN_TERMS = listOf(
@@ -111,5 +117,6 @@ internal class AgentIntentRouter {
         )
         val CONFIRMATION_PREFIXES = listOf("好的", "好", "嗯", "行")
         val CONFIRMATION_PUNCTUATION = charArrayOf('。', '！', '!', '？', '?', '，', ',', '；', ';')
+        val RATING_REQUEST_REGEX = Regex("(?:给|打|评|写个)?[1-5一二三四五]星(?:评价|好评|[，,。！!；;]|$)")
     }
 }

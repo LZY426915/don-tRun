@@ -30,10 +30,10 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加办公室"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("删除日用品分类"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("删除文件分类"))
-        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("评分给5星，写：效果很好"))
-        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("帮我评价农夫山泉，给5星"))
-        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("给农夫山泉写个5星评价"))
-        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("5星评价"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("评分给5星，写：效果很好", hasRecentItemContext = true))
+        assertEquals(AgentRoute.TOOL_AUTO, router.route("帮我评价农夫山泉，给5星"))
+        assertEquals(AgentRoute.TOOL_AUTO, router.route("给农夫山泉写个5星评价"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("5星评价", hasRecentItemContext = true))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("确认删除"))
     }
 
@@ -45,6 +45,8 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.GENERAL, router.route("把办公室灯光设置为暖色"))
         assertEquals(AgentRoute.GENERAL, router.route("请把日程改成明天"))
         assertEquals(AgentRoute.GENERAL, router.route("帮我评价一下这篇文章"))
+        assertEquals(AgentRoute.GENERAL, router.route("帮我评价电影《星际穿越》"))
+        assertEquals(AgentRoute.GENERAL, router.route("帮我评价一下五星酒店"))
     }
 
     @Test

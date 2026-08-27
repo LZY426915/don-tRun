@@ -64,8 +64,11 @@ class AgentClient @Inject constructor(
         history: List<ChatMessage>,
         newMessage: String
     ): Flow<AgentReplyEvent> = flow {
-        val route = intentRouter.route(newMessage)
         val recentItemContext = inventoryTool.getRecentItemContext()
+        val route = intentRouter.route(
+            message = newMessage,
+            hasRecentItemContext = recentItemContext != null
+        )
         val locationTreeContext = inventoryTool.getLocationTreeContext()
         val toolNudge = if (route == AgentRoute.GENERAL) null else buildToolNudge(newMessage)
         val requestLocationTree = locationTreeContext.takeUnless { toolNudge?.hideLocationTree == true }
