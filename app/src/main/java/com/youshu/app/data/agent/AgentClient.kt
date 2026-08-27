@@ -3,7 +3,14 @@ package com.youshu.app.data.agent
 import com.youshu.app.data.local.entity.Item
 import com.youshu.app.data.local.entity.ItemDetail
 import com.youshu.app.data.network.BackendApiClient
+import com.youshu.app.data.network.BackendStreamEvent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -27,6 +34,7 @@ class AgentClient @Inject constructor(
     private val weatherTool: WeatherAgentTool
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val intentRouter = AgentIntentRouter()
 
     // ──────────────────────────────────────────
     // 公开方法
@@ -39,88 +47,143 @@ class AgentClient @Inject constructor(
     suspend fun sendMessage(
         history: List<ChatMessage>,
         newMessage: String
-    ): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val recentItemContext = inventoryTool.getRecentItemContext()
-            val locationTreeContext = inventoryTool.getLocationTreeContext()
-            val toolNudge = buildToolNudge(newMessage)
-            val requestLocationTree = locationTreeContext.takeUnless { toolNudge?.hideLocationTree == true }
+    ): Result<String> = runCatching {
+        val content = StringBuilder()
+        streamMessage(history, newMessage).collect { event ->
+            when (event) {
+                is AgentReplyEvent.AppendText -> content.append(event.text)
+                AgentReplyEvent.ResetText -> content.clear()
+                AgentReplyEvent.Completed -> Unit
+            }
+        }
+        content.toString().ifBlank { error("AI 没有返回可用内容，请稍后重试") }
+    }
 
-            // 发送消息，带工具调用循环（最多 MAX_TOOL_ROUNDS 轮）
-            var currentResponse = executeApiCall(
-                buildRequestJson(
-                    history = history,
-                    newMessage = newMessage,
-                    recentItemContext = recentItemContext,
-                    locationTreeContext = requestLocationTree,
-                    toolNudge = toolNudge?.text,
-                    allowedToolNames = toolNudge?.allowedToolNames,
-                    includeTools = true
-                )
-            )
-            var lastToolResults: List<Pair<ToolCall, String>> = emptyList()
-            var retriedMissingTool = false
+    fun streamMessage(
+        history: List<ChatMessage>,
+        newMessage: String
+    ): Flow<AgentReplyEvent> = flow {
+        val route = intentRouter.route(newMessage)
+        val recentItemContext = inventoryTool.getRecentItemContext()
+        val locationTreeContext = inventoryTool.getLocationTreeContext()
+        val toolNudge = if (route == AgentRoute.GENERAL) null else buildToolNudge(newMessage)
+        val requestLocationTree = locationTreeContext.takeUnless { toolNudge?.hideLocationTree == true }
+        val toolMessages = mutableListOf<JsonObject>()
+        val allToolResults = mutableListOf<Pair<ToolCall, String>>()
+        val executedMutations = mutableSetOf<String>()
+        var retriedMissingTool = false
 
-            for (round in 1..MAX_TOOL_ROUNDS) {
-                val toolCalls = extractToolCalls(currentResponse)
-                if (toolCalls.isEmpty()) {
-                    if (lastToolResults.isEmpty() && !retriedMissingTool && toolNudge?.requiresToolCall == true) {
-                        retriedMissingTool = true
-                        currentResponse = executeApiCall(
-                            buildRequestJson(
-                                history = history,
-                                newMessage = newMessage,
-                                recentItemContext = recentItemContext,
-                                locationTreeContext = requestLocationTree,
-                                toolNudge = "${toolNudge.text}\n注意：上一轮没有检测到工具调用。用户是在要求查询或修改真实数据，不能只说“我帮你查看/我来处理”，必须先调用对应工具，拿到工具结果后再回复。",
-                                allowedToolNames = toolNudge.allowedToolNames,
-                                includeTools = true
-                            )
-                        )
-                        continue
-                    }
-                    break // AI 直接返回了文本，结束
-                }
+        var round = collectStreamingRound(
+            body = buildRequestJson(
+                history = history,
+                newMessage = newMessage,
+                recentItemContext = recentItemContext,
+                locationTreeContext = requestLocationTree,
+                toolNudge = toolNudge?.text,
+                allowedToolNames = toolNudge?.allowedToolNames,
+                includeTools = route != AgentRoute.GENERAL,
+                requireTool = route == AgentRoute.TOOL_REQUIRED,
+                stream = true
+            ),
+            exposeText = route != AgentRoute.TOOL_REQUIRED,
+            onEvent = { emit(it) }
+        )
 
-                // 执行所有工具调用
-                val toolResults = toolCalls.map { tc -> tc to executeToolCall(tc, newMessage) }
-                lastToolResults = toolResults
-                if (toolResults.any { (tc, _) -> isMutationTool(tc.name) }) {
-                    return@runCatching buildToolFallbackAnswer(newMessage, toolResults)
-                        ?: error("修改工具已经执行，但没有返回可展示的结果。")
-                }
-
-                // 将工具结果送回 AI
-                currentResponse = executeApiCall(
-                    buildToolResultRequest(
-                        history = history,
-                        newMessage = newMessage,
-                        assistantMessage = extractMessageJson(currentResponse),
-                        toolResults = toolResults,
-                        recentItemContext = inventoryTool.getRecentItemContext(),
-                        locationTreeContext = requestLocationTree,
-                        toolNudge = buildNextToolNudge(toolNudge, toolResults),
-                        allowedToolNames = nextAllowedToolNames(toolNudge, toolResults),
-                        includeTools = shouldIncludeToolsAfterResult(toolNudge, toolResults)
+        for (toolRound in 1..MAX_TOOL_ROUNDS) {
+            if (round.toolCalls.isEmpty()) {
+                if (
+                    route == AgentRoute.TOOL_REQUIRED &&
+                    allToolResults.isEmpty() &&
+                    !retriedMissingTool
+                ) {
+                    retriedMissingTool = true
+                    round = collectStreamingRound(
+                        body = buildRequestJson(
+                            history = history,
+                            newMessage = newMessage,
+                            recentItemContext = recentItemContext,
+                            locationTreeContext = requestLocationTree,
+                            toolNudge = "${toolNudge?.text.orEmpty()}\n上一轮没有调用工具。这次必须先调用允许的工具，不能口头假装完成。",
+                            allowedToolNames = toolNudge?.allowedToolNames,
+                            includeTools = true,
+                            requireTool = true,
+                            stream = true
+                        ),
+                        exposeText = false,
+                        onEvent = { emit(it) }
                     )
-                )
+                    continue
+                }
+
+                val shouldReplaceVisibleAnswer = allToolResults.isNotEmpty() && (
+                    shouldPreferToolResult(round.text, allToolResults) ||
+                        (isWeatherToolResult(allToolResults) && isRawWeatherToolAnswer(round.text))
+                    )
+                if (shouldReplaceVisibleAnswer) {
+                    emit(AgentReplyEvent.ResetText)
+                    emitFallback(newMessage, allToolResults) { emit(it) }
+                } else if (route == AgentRoute.TOOL_REQUIRED && allToolResults.isEmpty()) {
+                    emit(AgentReplyEvent.AppendText("我这次没能完成真实数据操作，数据没有被改动。请再说一次，我会重新执行。"))
+                } else if (round.text.isBlank() && allToolResults.isNotEmpty()) {
+                    emitFallback(newMessage, allToolResults) { emit(it) }
+                }
+                emit(AgentReplyEvent.Completed)
+                return@flow
             }
 
-            val content = extractContentOrNull(currentResponse)
-            val toolAnswer = buildToolFallbackAnswer(newMessage, lastToolResults)
-            val weatherFallback = buildWeatherFallbackAnswer(lastToolResults)
-            val safeToolAnswer = toolAnswer.takeUnless { isWeatherToolResult(lastToolResults) }
-            safeToolAnswer
-                ?.takeIf { content == null || shouldPreferToolResult(content, lastToolResults) }
-                ?: content?.takeUnless {
-                    (toolNudge?.requiresToolCall == true && lastToolResults.isEmpty()) ||
-                        (isWeatherToolResult(lastToolResults) && isRawWeatherToolAnswer(it))
+            val toolResults = round.toolCalls.map { toolCall ->
+                val mutationKey = "${toolCall.name}:${toolCall.arguments}"
+                if (isMutationTool(toolCall.name) && mutationKey in executedMutations) {
+                    toolCall to "该修改在本轮已经执行过，为避免重复写入，没有再次执行。"
+                } else {
+                    val result = executeToolCall(toolCall, newMessage)
+                    if (isMutationTool(toolCall.name)) executedMutations += mutationKey
+                    toolCall to result
                 }
-                ?: weatherFallback
-                ?: safeToolAnswer
-                ?: "这次没有真正调用到对应工具，数据没有被改动。你可以换个更明确的说法再试一次，比如“删除宿舍这个场景”。"
+            }
+            allToolResults += toolResults
+            toolMessages += buildAssistantToolMessage(round)
+            toolMessages += toolResults.map(::buildToolResultMessage)
+
+            val needsAnotherTool =
+                toolNudge?.flow == ToolFlow.Weather &&
+                    toolResults.any { (call, _) -> call.name == "get_weather_context" }
+            val nextAllowed = if (needsAnotherTool) setOf("find_weather_items") else emptySet()
+            val nextNudge = if (needsAnotherTool) {
+                buildNextToolNudge(toolNudge, toolResults)
+            } else {
+                "工具已经执行完毕。请严格依据工具结果，用自然、亲切的中文回答用户。不要再声称正在查询，也不要重复执行修改。"
+            }
+
+            round = try {
+                collectStreamingRound(
+                    body = buildContinuationRequest(
+                        history = history,
+                        newMessage = newMessage,
+                        recentItemContext = inventoryTool.getRecentItemContext(),
+                        locationTreeContext = requestLocationTree,
+                        toolNudge = nextNudge,
+                        toolMessages = toolMessages,
+                        allowedToolNames = nextAllowed,
+                        includeTools = needsAnotherTool,
+                        requireTool = needsAnotherTool,
+                        stream = true
+                    ),
+                    exposeText = !needsAnotherTool,
+                    onEvent = { emit(it) }
+                )
+            } catch (error: Throwable) {
+                currentCoroutineContext().ensureActive()
+                if (allToolResults.isEmpty()) throw error
+                emitFallback(newMessage, allToolResults) { emit(it) }
+                emit(AgentReplyEvent.Completed)
+                return@flow
+            }
         }
-    }
+
+        emitFallback(newMessage, allToolResults) { emit(it) }
+        emit(AgentReplyEvent.Completed)
+    }.flowOn(Dispatchers.IO)
 
     /**
      * 发送图片消息（多模态），暂不启用工具调用。
@@ -172,6 +235,42 @@ class AgentClient @Inject constructor(
 
     private suspend fun executeApiCall(body: String): String =
         backendApiClient.postJson(DEEPSEEK_CHAT_PATH, body)
+
+    private suspend fun collectStreamingRound(
+        body: String,
+        exposeText: Boolean,
+        onEvent: suspend (AgentReplyEvent) -> Unit
+    ): AgentRound {
+        val assembler = AgentStreamAssembler()
+        var resetSent = false
+        backendApiClient.postSse(DEEPSEEK_CHAT_PATH, body).collect { event ->
+            assembler.accept(event)
+            when (event) {
+                is BackendStreamEvent.TextDelta -> {
+                    if (exposeText) onEvent(AgentReplyEvent.AppendText(event.text))
+                }
+                is BackendStreamEvent.ToolCallDelta -> {
+                    if (exposeText && assembler.requiresVisibleTextReset && !resetSent) {
+                        resetSent = true
+                        onEvent(AgentReplyEvent.ResetText)
+                    }
+                }
+                is BackendStreamEvent.Done -> Unit
+            }
+        }
+        return assembler.buildRound()
+    }
+
+    private suspend fun emitFallback(
+        userMessage: String,
+        toolResults: List<Pair<ToolCall, String>>,
+        onEvent: suspend (AgentReplyEvent) -> Unit
+    ) {
+        val answer = buildWeatherFallbackAnswer(toolResults)
+            ?: buildToolFallbackAnswer(userMessage, toolResults)
+            ?: "工具已经执行，但暂时没能整理成完整回答。你可以查看 App 中的最新数据。"
+        onEvent(AgentReplyEvent.AppendText(answer))
+    }
 
     // ──────────────────────────────────────────
     // 响应解析
@@ -227,10 +326,12 @@ class AgentClient @Inject constructor(
         locationTreeContext: String?,
         toolNudge: String?,
         allowedToolNames: Set<String>? = null,
-        includeTools: Boolean
+        includeTools: Boolean,
+        requireTool: Boolean = false,
+        stream: Boolean = false
     ): String {
         return buildJsonObject {
-            put("stream", false)
+            put("stream", stream)
             putJsonArray("messages") {
                 addSystemPrompt()
                 addRecentItemContext(recentItemContext)
@@ -241,6 +342,7 @@ class AgentClient @Inject constructor(
             }
             if (includeTools) {
                 put("tools", selectTools(allowedToolNames))
+                if (requireTool) put("tool_choice", "required")
             }
         }.toString()
     }
@@ -249,19 +351,20 @@ class AgentClient @Inject constructor(
      * 构造工具调用结果回传的请求体：
      * [system, ...history, user, assistant(tool_calls), tool(result1), tool(result2), ...]
      */
-    private fun buildToolResultRequest(
+    private fun buildContinuationRequest(
         history: List<ChatMessage>,
         newMessage: String,
-        assistantMessage: JsonObject,
-        toolResults: List<Pair<ToolCall, String>>,
         recentItemContext: String?,
         locationTreeContext: String?,
+        toolMessages: List<JsonObject>,
         toolNudge: String? = null,
         allowedToolNames: Set<String>? = null,
-        includeTools: Boolean = true
+        includeTools: Boolean = true,
+        requireTool: Boolean = false,
+        stream: Boolean = false
     ): String {
         return buildJsonObject {
-            put("stream", false)
+            put("stream", stream)
             putJsonArray("messages") {
                 addSystemPrompt()
                 addRecentItemContext(recentItemContext)
@@ -269,24 +372,40 @@ class AgentClient @Inject constructor(
                 addToolNudge(toolNudge)
                 addHistory(history)
                 addUserMessage(newMessage)
-                // AI 返回的 assistant 消息（含 tool_calls）
-                add(assistantMessage)
-                // 每条工具结果
-                toolResults.forEach { (tc, resultText) ->
-                    add(
-                        buildJsonObject {
-                            put("role", "tool")
-                            put("tool_call_id", tc.id)
-                            put("content", resultText)
-                        }
-                    )
-                }
+                toolMessages.forEach { add(it) }
             }
             if (includeTools) {
                 put("tools", selectTools(allowedToolNames))
+                if (requireTool) put("tool_choice", "required")
             }
         }.toString()
     }
+
+    private fun buildAssistantToolMessage(round: AgentRound): JsonObject = buildJsonObject {
+        put("role", "assistant")
+        if (round.text.isNotBlank()) put("content", round.text)
+        putJsonArray("tool_calls") {
+            round.toolCalls.forEach { call ->
+                add(
+                    buildJsonObject {
+                        put("id", call.id)
+                        put("type", "function")
+                        putJsonObject("function") {
+                            put("name", call.name)
+                            put("arguments", call.arguments)
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private fun buildToolResultMessage(result: Pair<ToolCall, String>): JsonObject =
+        buildJsonObject {
+            put("role", "tool")
+            put("tool_call_id", result.first.id)
+            put("content", result.second)
+        }
 
     private fun selectTools(allowedToolNames: Set<String>?) = buildJsonArray {
         TOOLS_JSON.forEach { tool ->
@@ -342,12 +461,6 @@ class AgentClient @Inject constructor(
     // ──────────────────────────────────────────
     // 工具执行
     // ──────────────────────────────────────────
-
-    private data class ToolCall(
-        val id: String,
-        val name: String,
-        val arguments: String
-    )
 
     private data class ToolNudge(
         val text: String,
