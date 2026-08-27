@@ -28,6 +28,7 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("明天天气怎么样？"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加一个办公室场景"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("删除日用品分类"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("评分给5星，写：效果很好"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("确认删除"))
     }
 
@@ -35,5 +36,14 @@ class AgentIntentRouterTest {
     fun route_doesNotForceAppToolsForUnrelatedContentEditing() {
         assertEquals(AgentRoute.GENERAL, router.route("把这段文字删除"))
         assertEquals(AgentRoute.GENERAL, router.route("请删除上一条消息"))
+        assertEquals(AgentRoute.GENERAL, router.route("把灯光设置为暖色"))
+        assertEquals(AgentRoute.GENERAL, router.route("请把日程改成明天"))
+        assertEquals(AgentRoute.GENERAL, router.route("帮我评价一下这篇文章"))
+    }
+
+    @Test
+    fun route_acceptsNaturalDeleteConfirmationPunctuation() {
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("确认删除。"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("好的，确认删除！"))
     }
 }

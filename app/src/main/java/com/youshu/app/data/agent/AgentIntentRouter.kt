@@ -20,25 +20,23 @@ internal class AgentIntentRouter {
     }
 
     private fun isExplicitMutation(text: String): Boolean {
-        if (REVIEW_TERMS.any(text::contains)) return true
-        if (STATUS_TERMS.any(text::contains) && MUTATION_TERMS.any(text::contains)) return true
+        if (REVIEW_TERMS.any(text::contains) && RATING_TERMS.any(text::contains)) return true
 
         val hasMutation = MUTATION_TERMS.any(text::contains)
         if (!hasMutation) return false
-        val hasAppDomain = APP_DOMAIN_TERMS.any(text::contains)
-        val looksLikeDirectCommand = COMMAND_PREFIXES.any(text::startsWith) || text.contains("帮我")
-        return hasAppDomain || (looksLikeDirectCommand && !looksLikeGeneralHowTo(text))
+
+        if (APP_DOMAIN_TERMS.any(text::contains)) return true
+        if (STATUS_TERMS.any(text::contains) && STATUS_MUTATION_TERMS.any(text::contains)) return true
+        return false
     }
 
-    private fun isDeleteConfirmation(text: String): Boolean = text in setOf(
-        "确认删除",
-        "确定删除",
-        "同意删除",
-        "可以删",
-        "删吧",
-        "都删了",
-        "继续删"
-    )
+    private fun isDeleteConfirmation(text: String): Boolean {
+        var normalized = text.trim(*CONFIRMATION_PUNCTUATION)
+        CONFIRMATION_PREFIXES.firstOrNull(normalized::startsWith)?.let { prefix ->
+            normalized = normalized.removePrefix(prefix).trimStart(*CONFIRMATION_PUNCTUATION)
+        }
+        return normalized in DELETE_CONFIRMATIONS
+    }
 
     private fun isUnrelatedContentMutation(text: String): Boolean {
         val hasMutation = MUTATION_TERMS.any(text::contains)
@@ -52,11 +50,6 @@ internal class AgentIntentRouter {
             "文件",
             "文档"
         ).any(text::contains)
-    }
-
-    private fun looksLikeGeneralHowTo(text: String): Boolean {
-        if (!text.startsWith("怎么") && !text.startsWith("如何")) return false
-        return APP_DOMAIN_TERMS.none(text::contains) && STATUS_TERMS.none(text::contains)
     }
 
     private fun isInventoryQuery(text: String): Boolean {
@@ -91,12 +84,25 @@ internal class AgentIntentRouter {
             "添加", "新增", "创建", "建立", "加上", "删除", "删掉", "移除",
             "标记", "改成", "设置", "设为", "确认删除"
         )
-        val REVIEW_TERMS = listOf("写评价", "帮我评价", "评分给", "评五星", "打五星")
+        val REVIEW_TERMS = listOf("写评价", "评分给", "评五星", "打五星")
+        val RATING_TERMS = listOf("星", "评分", "评价")
         val STATUS_TERMS = listOf("用完", "没用完", "未用完", "丢弃", "废弃")
+        val STATUS_MUTATION_TERMS = listOf("标记", "改成", "设置", "设为")
         val APP_DOMAIN_TERMS = listOf(
             "场景", "位置", "存放位置", "大位置", "子位置", "分类", "类别", "种类",
-            "物品", "库存", "库房"
+            "物品", "库存", "库房", "家里", "我的家", "宿舍", "办公室", "卧室", "厨房",
+            "客厅", "卫生间", "储物间", "阳台", "书房", "衣柜", "冰箱"
         )
-        val COMMAND_PREFIXES = listOf("帮我", "请", "把", "删除", "删掉", "添加", "新增", "创建")
+        val DELETE_CONFIRMATIONS = setOf(
+            "确认删除",
+            "确定删除",
+            "同意删除",
+            "可以删",
+            "删吧",
+            "都删了",
+            "继续删"
+        )
+        val CONFIRMATION_PREFIXES = listOf("好的", "好", "嗯", "行")
+        val CONFIRMATION_PUNCTUATION = charArrayOf('。', '！', '!', '？', '?', '，', ',', '；', ';')
     }
 }
