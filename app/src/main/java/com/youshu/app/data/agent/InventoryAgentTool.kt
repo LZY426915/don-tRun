@@ -36,6 +36,26 @@ class InventoryAgentTool @Inject constructor(
     @Volatile
     private var pendingDeleteLocationPath: String? = null
 
+    @Volatile
+    private var pendingMoveItemId: Long? = null
+
+    @Volatile
+    private var pendingMoveLeafPaths: List<String> = emptyList()
+
+    fun hasPendingItemLocationMove(): Boolean = pendingMoveItemId != null
+
+    fun isPendingItemLocationChoice(value: String): Boolean {
+        if (!hasPendingItemLocationMove() || pendingMoveLeafPaths.isEmpty()) return false
+        if (resolvePendingLeafChoice(value) != null) return true
+        val compact = normalizeLocationPath(value).replace(" ", "")
+        return pendingMoveLeafPaths.any { path ->
+            val normalizedPath = normalizeLocationPath(path).replace(" ", "")
+            val leafName = splitLocationPath(path).lastOrNull().orEmpty().replace(" ", "")
+            compact.contains(normalizedPath, ignoreCase = true) ||
+                (leafName.isNotBlank() && compact.contains(leafName, ignoreCase = true))
+        }
+    }
+
     // ──────────────────────────────────────────
     // 1. 关键词搜索物品
     // ──────────────────────────────────────────
@@ -233,6 +253,74 @@ class InventoryAgentTool @Inject constructor(
             }
             else -> "我没理解要把“${item.name}”改成什么状态。可以说：标记用完、改回没用完，或标记丢弃。"
         }
+    }
+
+    suspend fun moveItemToLocation(
+        keyword: String,
+        targetLocation: String
+    ): String {
+        val itemDetail = resolveSingleItem(keyword).getOrElse { return it.message.orEmpty() }
+        val locations = locationDao.getAllLocationsSnapshot()
+        val resolvedTargetLocation = resolvePendingLeafChoice(targetLocation) ?: targetLocation
+        val target = resolveSingleLocation(resolvedTargetLocation, locations)
+            .getOrElse {
+                pendingMoveItemId = itemDetail.item.id
+                rememberItem(itemDetail.item.id)
+                return it.message.orEmpty()
+            }
+        val targetPath = locationPath(target, locations)
+        val children = locations.filter { it.parentId == target.id }
+        if (children.isNotEmpty()) {
+            pendingMoveItemId = itemDetail.item.id
+            rememberItem(itemDetail.item.id)
+            val leaves = collectLocationDescendants(target.id, locations)
+                .mapNotNull { id -> locations.firstOrNull { it.id == id } }
+                .filter { candidate -> locations.none { it.parentId == candidate.id } }
+                .map { locationPath(it, locations) }
+                .sorted()
+            pendingMoveLeafPaths = leaves
+            return buildString {
+                append("“$targetPath”不是最后一级，不能直接存放物品。请选择下面一个末级位置：")
+                leaves.forEachIndexed { index, path -> append("\n${index + 1}. $path") }
+            }
+        }
+
+        val updated = itemDetail.item.copy(locationId = target.id)
+        itemDao.update(updated)
+        val verified = itemDao.getItemDetailById(updated.id).firstOrNull()
+        if (verified?.item?.locationId != target.id) {
+            return "修改“${updated.name}”的存放位置失败，数据没有确认写入。"
+        }
+
+        pendingMoveItemId = null
+        pendingMoveLeafPaths = emptyList()
+        rememberItem(updated.id)
+        val verifiedPath = verified.locationName ?: targetPath
+        return "已将“${updated.name}”的存放位置修改为“$verifiedPath”。"
+    }
+
+    private fun resolvePendingLeafChoice(value: String): String? {
+        if (pendingMoveLeafPaths.isEmpty()) return null
+        val compact = value.trim().replace(" ", "")
+        val numberText = Regex("第?([0-9一二三四五六七八九十]+)个?")
+            .find(compact)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return null
+        val number = numberText.toIntOrNull() ?: when (numberText) {
+            "一" -> 1
+            "二" -> 2
+            "三" -> 3
+            "四" -> 4
+            "五" -> 5
+            "六" -> 6
+            "七" -> 7
+            "八" -> 8
+            "九" -> 9
+            "十" -> 10
+            else -> null
+        }
+        return number?.let { pendingMoveLeafPaths.getOrNull(it - 1) }
     }
 
     suspend fun writeItemReview(
@@ -593,9 +681,24 @@ class InventoryAgentTool @Inject constructor(
         val normalized = keyword.trim()
         if (normalized.isBlank()) return false
         return item.name.contains(normalized, ignoreCase = true) ||
+            item.name.containsCharactersInOrder(normalized) ||
             item.note.contains(normalized, ignoreCase = true) ||
             categoryName.orEmpty().contains(normalized, ignoreCase = true) ||
             locationName.orEmpty().contains(normalized, ignoreCase = true)
+    }
+
+    private fun String.containsCharactersInOrder(query: String): Boolean {
+        val normalizedSource = lowercase().filterNot(Char::isWhitespace)
+        val normalizedQuery = query.lowercase().filterNot(Char::isWhitespace)
+        if (normalizedQuery.length < 2) return false
+
+        var queryIndex = 0
+        normalizedSource.forEach { character ->
+            if (queryIndex < normalizedQuery.length && character == normalizedQuery[queryIndex]) {
+                queryIndex += 1
+            }
+        }
+        return queryIndex == normalizedQuery.length
     }
 
     private fun semanticHintScore(query: String, detail: ItemDetail): Int {

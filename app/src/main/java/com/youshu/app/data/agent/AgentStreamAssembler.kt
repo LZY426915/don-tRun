@@ -41,14 +41,14 @@ internal class AgentStreamAssembler {
     }
 
     fun buildRound(): AgentRound = AgentRound(
-        text = text.toString(),
+        text = AgentProtocolText.parse(text.toString()).visibleText,
         toolCalls = toolCalls.values.map {
             ToolCall(
                 id = it.id.toString(),
                 name = it.name.toString(),
                 arguments = it.arguments.toString().ifBlank { "{}" }
             )
-        },
+        }.ifEmpty { AgentProtocolText.parse(text.toString()).toolCalls },
         finishReason = finishReason
     )
 

@@ -13,6 +13,7 @@ internal class AgentIntentRouter {
         if (isUserLocationMetaQuestion(text)) return AgentRoute.GENERAL
         if (WEATHER_TERMS.any(text::contains)) return AgentRoute.TOOL_REQUIRED
         if (isDeleteConfirmation(text)) return AgentRoute.TOOL_REQUIRED
+        if (AgentIntentPatterns.isItemLocationMove(text)) return AgentRoute.TOOL_REQUIRED
         if (isRatingRequest(text)) {
             return if (
                 STRONG_APP_DOMAIN_TERMS.any(text::contains) ||

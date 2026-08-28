@@ -25,6 +25,10 @@ class AgentIntentRouterTest {
     @Test
     fun route_requiresToolsForWeatherAndExplicitMutations() {
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把农夫山泉标记成用完"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把农夫山泉放到我的家 / 厨房 / 冰箱"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把农夫山泉的位置改到床头柜"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("帮我把华为耳机换回到书桌"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把耳机移回书桌"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("明天天气怎么样？"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加一个办公室场景"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加办公室"))

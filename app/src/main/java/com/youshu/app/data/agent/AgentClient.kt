@@ -65,17 +65,34 @@ class AgentClient @Inject constructor(
         newMessage: String
     ): Flow<AgentReplyEvent> = flow {
         val recentItemContext = inventoryTool.getRecentItemContext()
-        val route = intentRouter.route(
-            message = newMessage,
-            hasRecentItemContext = recentItemContext != null
-        )
+        val pendingLocationSelection = inventoryTool.isPendingItemLocationChoice(newMessage)
+        val route = if (pendingLocationSelection) {
+            AgentRoute.TOOL_REQUIRED
+        } else {
+            intentRouter.route(
+                message = newMessage,
+                hasRecentItemContext = recentItemContext != null
+            )
+        }
         val locationTreeContext = inventoryTool.getLocationTreeContext()
-        val toolNudge = if (route == AgentRoute.GENERAL) null else buildToolNudge(newMessage)
+        val toolNudge = when {
+            pendingLocationSelection -> ToolNudge(
+                text = "用户正在回答上一轮的末级位置选择。必须调用 update_item_location：keyword 留空以使用待处理物品；target_location 根据用户本条回复填写，用户回复序号时原样传入。工具返回后再确认结果。",
+                allowedToolNames = setOf("update_item_location"),
+                requiresToolCall = true
+            )
+            route == AgentRoute.GENERAL -> null
+            else -> buildToolNudge(newMessage)
+        }
         val requestLocationTree = locationTreeContext.takeUnless { toolNudge?.hideLocationTree == true }
         val toolMessages = mutableListOf<JsonObject>()
         val allToolResults = mutableListOf<Pair<ToolCall, String>>()
         val executedMutations = mutableSetOf<String>()
         var retriedMissingTool = false
+
+        if (route == AgentRoute.TOOL_REQUIRED && toolNudge?.allowedToolNames.orEmpty().any(::isMutationTool)) {
+            emit(AgentReplyEvent.AppendText("稍等，我来操作。\n\n"))
+        }
 
         var round = collectStreamingRound(
             body = buildRequestJson(
@@ -95,11 +112,14 @@ class AgentClient @Inject constructor(
 
         for (toolRound in 1..MAX_TOOL_ROUNDS) {
             if (round.toolCalls.isEmpty()) {
-                if (
-                    route == AgentRoute.TOOL_REQUIRED &&
-                    allToolResults.isEmpty() &&
-                    !retriedMissingTool
-                ) {
+                val shouldRetryMissingTool =
+                    route == AgentRoute.TOOL_REQUIRED ||
+                        AgentToolReplyPolicy.shouldRetryWithoutTool(
+                            route = route,
+                            visibleText = round.text,
+                            hasToolResults = allToolResults.isNotEmpty()
+                        )
+                if (shouldRetryMissingTool && allToolResults.isEmpty() && !retriedMissingTool) {
                     retriedMissingTool = true
                     round = collectStreamingRound(
                         body = buildRequestJson(
@@ -137,7 +157,14 @@ class AgentClient @Inject constructor(
 
             val toolResults = round.toolCalls.map { toolCall ->
                 val mutationKey = toolCallIdentity(toolCall)
-                if (isMutationTool(toolCall.name) && mutationKey in executedMutations) {
+                val allowedToolNames = toolNudge?.allowedToolNames
+                val isUnexpectedUnsafeTool =
+                    allowedToolNames != null &&
+                        toolCall.name !in allowedToolNames &&
+                        !AgentToolReplyPolicy.isSafeUnexpectedLookup(toolCall.name)
+                if (isUnexpectedUnsafeTool) {
+                    toolCall to "当前用户请求不允许执行工具 ${toolCall.name}，数据没有被改动。"
+                } else if (isMutationTool(toolCall.name) && mutationKey in executedMutations) {
                     toolCall to "该修改在本轮已经执行过，为避免重复写入，没有再次执行。"
                 } else {
                     val result = executeToolCall(toolCall, newMessage)
@@ -154,12 +181,23 @@ class AgentClient @Inject constructor(
             toolMessages += buildAssistantToolMessage(round)
             toolMessages += toolResults.map(::buildToolResultMessage)
 
-            val needsAnotherTool =
+            val needsWeatherTool =
                 toolNudge?.flow == ToolFlow.Weather &&
                     toolResults.any { (call, _) -> call.name == "get_weather_context" }
-            val nextAllowed = if (needsAnotherTool) setOf("find_weather_items") else emptySet()
-            val nextNudge = if (needsAnotherTool) {
+            val needsAllowedMutationTool = AgentToolReplyPolicy.shouldContinueToAllowedTool(
+                allowedToolNames = toolNudge?.allowedToolNames,
+                executedToolNames = toolResults.map { it.first.name }.toSet()
+            )
+            val needsAnotherTool = needsWeatherTool || needsAllowedMutationTool
+            val nextAllowed = when {
+                needsWeatherTool -> setOf("find_weather_items")
+                needsAllowedMutationTool -> toolNudge?.allowedToolNames.orEmpty()
+                else -> emptySet()
+            }
+            val nextNudge = if (needsWeatherTool) {
                 buildNextToolNudge(toolNudge, toolResults)
+            } else if (needsAllowedMutationTool) {
+                "物品查询只是中间步骤，用户要求的修改还没有完成。现在必须调用 ${nextAllowed.joinToString()} 执行真实修改；依据查询结果填写物品参数，依据用户原话填写目标位置。不能只口头说已经完成。"
             } else {
                 "工具已经执行完毕。请严格依据工具结果，用自然、亲切的中文回答用户。不要再声称正在查询，也不要重复执行修改。"
             }
@@ -251,12 +289,24 @@ class AgentClient @Inject constructor(
         onEvent: suspend (AgentReplyEvent) -> Unit
     ): AgentRound {
         val assembler = AgentStreamAssembler()
+        val visibleTextGuard = AgentVisibleTextGuard()
         var resetSent = false
+        var visibleTextSent = false
         backendApiClient.postSse(DEEPSEEK_CHAT_PATH, body).collect { event ->
             assembler.accept(event)
             when (event) {
                 is BackendStreamEvent.TextDelta -> {
-                    if (exposeText) onEvent(AgentReplyEvent.AppendText(event.text))
+                    if (exposeText) {
+                        val visible = visibleTextGuard.accept(event.text)
+                        if (visible.isNotEmpty()) {
+                            visibleTextSent = true
+                            onEvent(AgentReplyEvent.AppendText(visible))
+                        }
+                        if (visibleTextGuard.protocolDetected && visibleTextSent && !resetSent) {
+                            resetSent = true
+                            onEvent(AgentReplyEvent.ResetText)
+                        }
+                    }
                 }
                 is BackendStreamEvent.ToolCallDelta -> {
                     if (exposeText && assembler.requiresVisibleTextReset && !resetSent) {
@@ -264,7 +314,12 @@ class AgentClient @Inject constructor(
                         onEvent(AgentReplyEvent.ResetText)
                     }
                 }
-                is BackendStreamEvent.Done -> Unit
+                is BackendStreamEvent.Done -> {
+                    if (exposeText) {
+                        val remaining = visibleTextGuard.flush()
+                        if (remaining.isNotEmpty()) onEvent(AgentReplyEvent.AppendText(remaining))
+                    }
+                }
             }
         }
         return assembler.buildCompletedRound()
@@ -496,11 +551,12 @@ class AgentClient @Inject constructor(
             "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么",
             "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
         ).any { text.contains(it) }
-        if (!hasMutationWord && !hasQueryWord) return null
+        val isLocationMove = AgentIntentPatterns.isItemLocationMove(text)
+        if (!hasMutationWord && !hasQueryWord && !isLocationMove) return null
 
         var allowedToolNames: Set<String>? = null
         var hideLocationTree = false
-        var requiresToolCall = hasMutationWord
+        var requiresToolCall = hasMutationWord || isLocationMove
         val targetTool = when {
             isSceneAddAndLocationDeleteRequest(text) -> {
                 allowedToolNames = setOf("add_scene", "preview_delete_location_tree")
@@ -513,6 +569,11 @@ class AgentClient @Inject constructor(
                 hideLocationTree = true
                 requiresToolCall = true
                 "add_scene。场景名放到 name；用户说自动推荐位置时 child_locations 传空数组；用户列出子位置时传入 child_locations。"
+            }
+            isLocationMove -> {
+                allowedToolNames = setOf("update_item_location")
+                requiresToolCall = true
+                "update_item_location。keyword 传物品名或关键词；target_location 传目标末级位置的完整路径或名称。必须以工具回查结果判断是否修改成功。"
             }
             listOf("位置", "存放", "地点", "地方", "区域", "房间", "下面", "下一级").any { text.contains(it) } &&
                 listOf("添加", "新增", "加上", "创建", "建立").any { text.contains(it) } -> {
@@ -708,6 +769,12 @@ class AgentClient @Inject constructor(
                         status = args["status"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                         rating = parseRatingArgument(args, userMessage),
                         reviewNote = args["review_note"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    )
+                }
+                "update_item_location" -> {
+                    inventoryTool.moveItemToLocation(
+                        keyword = args["keyword"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        targetLocation = args["target_location"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     )
                 }
                 "write_item_review" -> {
@@ -1071,6 +1138,7 @@ class AgentClient @Inject constructor(
     private fun isMutationTool(name: String): Boolean {
         return name in setOf(
             "update_item_status",
+            "update_item_location",
             "write_item_review",
             "delete_item",
             "add_location",
@@ -1267,7 +1335,7 @@ class AgentClient @Inject constructor(
 - 当用户询问天气、穿衣、饮食、带伞、防晒、冷热、适不适合出门等天气相关问题时，务必先调用 get_weather_context 获取真实天气；如果用户没说城市，city 传空字符串，让工具自动按当前网络定位城市。
 - 天气问题在给出穿衣、带伞、防晒、出门携带物等建议时，还要调用 find_weather_items 查库存里相关物品的位置。默认 place_scope 传“家”；如果用户说“宿舍/公司/学校/办公室那边”，place_scope 传用户说的大位置。最终回答里要自然带上“如果要带伞，家里的折叠伞在……”“外套在……”这类位置信息。
 - find_weather_items 返回的是候选池，不是最终结果。你要结合天气，只挑用户本次可能需要的东西；如果没找到建议物品，就说没在对应地点找到，不要编造位置。
-- 当用户明确要求你修改数据时，才调用修改类工具，例如标记用完/没用完、写评价、删除物品、添加或删除分类、添加或删除存放位置。
+- 当用户明确要求你修改数据时，才调用修改类工具，例如标记用完/没用完、修改物品存放位置、写评价、删除物品、添加或删除分类、添加或删除存放位置。
 - 对所有修改真实数据的请求，必须先调用对应工具，看到工具返回成功后才能说“已完成/搞定/添加好了/删除了/设置好了”。没有工具结果时，绝对不能口头假装已经完成。
 - 修改或删除前必须尽量从用户话里提取清楚对象名称；如果工具提示匹配到多个对象或对象不明确，就自然追问，不要编造已经完成。
 - 如果用户在连续对话里说“它、这个、那个、刚刚那个、刚才标记的那个、继续给它评分/评价”，应优先沿用系统提示里的“最近一次成功操作的物品”，并直接调用对应修改工具；不要自己根据聊天记录猜测数据库里有没有这件物品。
@@ -1471,6 +1539,31 @@ class AgentClient @Inject constructor(
                             }
                             putJsonArray("required") {
                                 add(jsonPrimitive("status"))
+                            }
+                        }
+                    }
+                }
+            )
+            add(
+                buildJsonObject {
+                    put("type", "function")
+                    putJsonObject("function") {
+                        put("name", "update_item_location")
+                        put("description", "修改某个物品的存放位置。仅在用户明确要求把物品放到、移到、挪到或改到另一个位置时调用。目标必须是位置树中没有下级的末级位置；如果用户说‘它/刚刚那个’，keyword 可以留空。")
+                        putJsonObject("parameters") {
+                            put("type", "object")
+                            putJsonObject("properties") {
+                                putJsonObject("keyword") {
+                                    put("type", "string")
+                                    put("description", "要移动的物品名称或关键词；用户指代最近操作的物品时可以留空。")
+                                }
+                                putJsonObject("target_location") {
+                                    put("type", "string")
+                                    put("description", "目标末级位置名称或完整路径，例如‘我的家 / 厨房 / 冰箱’。优先传完整路径以避免重名。")
+                                }
+                            }
+                            putJsonArray("required") {
+                                add(jsonPrimitive("target_location"))
                             }
                         }
                     }

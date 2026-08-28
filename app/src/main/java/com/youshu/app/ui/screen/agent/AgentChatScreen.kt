@@ -10,6 +10,12 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
@@ -53,6 +59,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -82,6 +89,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -90,7 +98,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -106,6 +117,7 @@ import com.youshu.app.data.agent.ChatMessage
 import com.youshu.app.data.agent.ChatMessageStatus
 import com.youshu.app.data.agent.ChatRole
 import com.youshu.app.ui.components.AppDecorativeBackground
+import com.youshu.app.ui.components.ImagePreviewOverlay
 import com.youshu.app.ui.components.PhotoEditOverlay
 import com.youshu.app.ui.theme.DividerSoft
 import com.youshu.app.ui.theme.PurpleStart
@@ -582,6 +594,18 @@ private fun ChatBubble(
     } else {
         RoundedCornerShape(8.dp, 22.dp, 22.dp, 22.dp)
     }
+    var showImagePreview by remember(message.imageUri) { mutableStateOf(false) }
+    val formattedText = remember(message.content) {
+        buildAnnotatedString {
+            parseChatMarkdown(message.content).forEach { segment ->
+                if (segment.bold) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(segment.text) }
+                } else {
+                    append(segment.text)
+                }
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val maxBubbleWidth = maxWidth * 0.75f
@@ -612,18 +636,26 @@ private fun ChatBubble(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     message.imageUri?.let { imageUri ->
-                        ChatImagePreview(imageUri = imageUri)
+                        ChatImagePreview(
+                            imageUri = imageUri,
+                            onClick = { showImagePreview = true }
+                        )
                     }
 
                     if (message.status == ChatMessageStatus.LOADING && message.content.isBlank()) {
                         LoadingMessageContent()
                     } else {
-                        Text(
-                            text = message.content,
-                            color = textColor,
-                            fontSize = 15.sp,
-                            lineHeight = 22.sp
-                        )
+                        SelectionContainer {
+                            Text(
+                                text = formattedText,
+                                color = textColor,
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp
+                            )
+                        }
+                        if (message.status == ChatMessageStatus.LOADING) {
+                            InlineWorkingContent()
+                        }
                         if (message.status == ChatMessageStatus.STOPPED) {
                             Text(
                                 text = "已停止生成",
@@ -643,6 +675,15 @@ private fun ChatBubble(
                 }
             }
         }
+    }
+
+    val imageUri = message.imageUri
+    if (showImagePreview && imageUri != null && !imageUri.startsWith("mock://")) {
+        ImagePreviewOverlay(
+            imagePaths = listOf(imageUri),
+            initialIndex = 0,
+            onDismissRequest = { showImagePreview = false }
+        )
     }
 }
 
@@ -685,7 +726,39 @@ private fun LoadingMessageContent() {
 }
 
 @Composable
-private fun ChatImagePreview(imageUri: String) {
+private fun InlineWorkingContent() {
+    val transition = rememberInfiniteTransition(label = "agent-working-dots")
+    val progress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "agent-working-progress"
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        repeat(3) { index ->
+            Text(
+                text = "•",
+                color = PurpleStart,
+                fontSize = 16.sp,
+                modifier = Modifier.alpha(
+                    if (progress >= index) 1f else 0.22f
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatImagePreview(
+    imageUri: String,
+    onClick: () -> Unit
+) {
     val isMockImage = imageUri.startsWith("mock://")
 
     if (isMockImage) {
@@ -721,7 +794,8 @@ private fun ChatImagePreview(imageUri: String) {
             modifier = Modifier
                 .fillMaxWidth()
                 .height(132.dp)
-                .clip(RoundedCornerShape(18.dp)),
+                .clip(RoundedCornerShape(18.dp))
+                .clickable(onClick = onClick),
             contentScale = ContentScale.Crop
         )
     }
