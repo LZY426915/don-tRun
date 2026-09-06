@@ -80,9 +80,17 @@ internal class AgentIntentRouter {
             return true
         }
         val asksLocation = listOf("在哪", "哪里", "放哪", "找不到").any(text::contains)
-        val asksContents = listOf("有什么东西", "有哪些东西", "放了什么", "存了什么").any(text::contains)
+        val asksContents = listOf(
+            "有什么东西", "有哪些东西", "放了什么", "存了什么",
+            "有东西吗", "有东西没", "有东西没有", "有物品吗",
+            "放东西了吗", "放东西没", "有没有东西", "有没有物品"
+        ).any(text::contains)
+        // “XX里/上/中有什么、有啥、有哪些、放了什么、还有……”这类地点内容/存在询问
+        val asksPlaceContents = Regex("""[里上中](有(什么|啥|哪些|东西|物品|没有|吗)|放了什么|存了什么|放了啥|放东西|放没放|还有)""")
+            .containsMatchIn(text)
         val mentionsInventory = listOf("家里", "宿舍", "卧室", "厨房", "库房", "物品", "东西").any(text::contains)
-        return asksLocation || asksContents || (mentionsInventory && listOf("有没有", "哪些", "清单").any(text::contains))
+        return asksLocation || asksContents || asksPlaceContents ||
+            (mentionsInventory && listOf("有没有", "哪些", "清单", "有吗").any(text::contains))
     }
 
     private fun isUserLocationMetaQuestion(text: String): Boolean = listOf(

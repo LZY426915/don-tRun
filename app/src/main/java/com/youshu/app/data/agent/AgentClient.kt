@@ -548,8 +548,8 @@ class AgentClient @Inject constructor(
             "确认", "确定", "同意", "删吧", "都删了", "继续删", "可以删"
         ).any { text.contains(it) }
         val hasQueryWord = listOf(
-            "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么",
-            "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
+            "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么", "有啥",
+            "有东西", "有物品", "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
         ).any { text.contains(it) }
         val isLocationMove = AgentIntentPatterns.isItemLocationMove(text)
         if (!hasMutationWord && !hasQueryWord && !isLocationMove) return null
@@ -637,11 +637,11 @@ class AgentClient @Inject constructor(
                 requiresToolCall = true
                 "get_used_up_items。"
             }
-            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存").any { text.contains(it) } &&
+            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存", "有东西", "有物品", "有啥").any { text.contains(it) } &&
                 !isUserLocationMetaQuestion(text) -> {
                 allowedToolNames = setOf("search_items", "find_related_items", "get_items_by_location")
                 requiresToolCall = false
-                "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么时调用 get_items_by_location。"
+                "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么、有没有东西时调用 get_items_by_location。"
             }
             else -> return null
         }
