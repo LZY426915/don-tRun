@@ -53,6 +53,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.youshu.app.ui.components.GlassPanel
 import com.youshu.app.ui.components.appGlassStyle
 import com.youshu.app.ui.screen.agent.AgentChatScreen
@@ -240,7 +241,12 @@ fun AppNavGraph() {
                 }
 
                 composable(Screen.AgentChat.route) {
+                    val homeEntry = remember(navController.currentBackStackEntry) {
+                        navController.getBackStackEntry(Screen.Home.route)
+                    }
+                    val agentViewModel: com.youshu.app.ui.viewmodel.AgentChatViewModel = hiltViewModel(homeEntry)
                     AgentChatScreen(
+                        viewModel = agentViewModel,
                         onBack = { navController.popBackStack() }
                     )
                 }

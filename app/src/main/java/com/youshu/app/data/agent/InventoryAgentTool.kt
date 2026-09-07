@@ -56,6 +56,22 @@ class InventoryAgentTool @Inject constructor(
         }
     }
 
+    fun isPendingItemLocationAmbiguousReply(value: String): Boolean {
+        if (!hasPendingItemLocationMove() || pendingMoveLeafPaths.isEmpty()) return false
+        val compact = value.trim().replace(" ", "")
+        return compact in setOf("是", "是的", "对", "对的", "嗯", "可以", "确认", "好的", "好")
+    }
+
+    fun pendingItemLocationChoicePrompt(): String {
+        if (!hasPendingItemLocationMove() || pendingMoveLeafPaths.isEmpty()) {
+            return "请告诉我要把物品放到哪个具体位置。"
+        }
+        return buildString {
+            append("这里需要选一个末级位置，不能只回复“是的”。请选择下面一个：")
+            pendingMoveLeafPaths.forEachIndexed { index, path -> append("\n${index + 1}. $path") }
+        }
+    }
+
     // ──────────────────────────────────────────
     // 1. 关键词搜索物品
     // ──────────────────────────────────────────
@@ -126,25 +142,6 @@ class InventoryAgentTool @Inject constructor(
 
     suspend fun getItemsByLocationSnapshot(locationName: String): List<ItemDetail> {
         return itemDao.getItemsByLocationName(locationName.trim()).firstOrNull().orEmpty()
-    }
-
-    /**
-     * 判断某个位置（名称或完整路径）是否真实存在于位置树中。
-     * 用于区分"位置不存在"和"位置存在但暂时没有物品"两种情况：
-     * 前者应提示用户是否需要添加，后者应如实说没有物品。
-     */
-    suspend fun locationExists(nameOrPath: String): Boolean {
-        val normalized = normalizeLocationPath(nameOrPath)
-        if (normalized.isBlank()) return false
-        val locations = locationDao.getAllLocationsSnapshot()
-        if (locations.isEmpty()) return false
-        val pathVariants = locationPathVariants(normalized)
-        val nameVariants = locationNameVariants(normalized)
-        return locations.any { location ->
-            pathVariants.any { variant ->
-                normalizeLocationPath(locationPath(location, locations)).equals(variant, ignoreCase = true)
-            } || nameVariants.any { variant -> location.name.equals(variant, ignoreCase = true) }
-        }
     }
 
     // ──────────────────────────────────────────
@@ -242,31 +239,42 @@ class InventoryAgentTool @Inject constructor(
         return when (normalizedStatus) {
             "used_up", "used", "用完", "已用完" -> {
                 val fixedRating = rating?.coerceIn(1, 5) ?: item.rating
-                itemDao.update(
-                    item.copy(
-                        status = Item.STATUS_USED_UP,
-                        rating = fixedRating,
-                        ratedAt = if (fixedRating != null) now else item.ratedAt,
-                        reviewNote = reviewNote.ifBlank { item.reviewNote }
-                    )
+                val updated = item.copy(
+                    status = Item.STATUS_USED_UP,
+                    rating = fixedRating,
+                    ratedAt = if (fixedRating != null) now else item.ratedAt,
+                    reviewNote = reviewNote.ifBlank { item.reviewNote }
                 )
+                itemDao.update(updated)
+                val verified = itemDao.getItemDetailById(item.id).firstOrNull()?.item
+                if (verified != updated) {
+                    return "标记“${item.name}”为已用完失败，数据没有确认写入。"
+                }
                 rememberItem(item.id)
                 "已把“${item.name}”标记为已用完${formatOptionalReview(fixedRating, reviewNote)}。"
             }
             "in_use", "active", "not_used_up", "没用完", "未用完", "在用" -> {
-                itemDao.update(
-                    item.copy(
-                        status = Item.STATUS_IN_USE,
-                        rating = null,
-                        ratedAt = null,
-                        reviewNote = ""
-                    )
+                val updated = item.copy(
+                    status = Item.STATUS_IN_USE,
+                    rating = null,
+                    ratedAt = null,
+                    reviewNote = ""
                 )
+                itemDao.update(updated)
+                val verified = itemDao.getItemDetailById(item.id).firstOrNull()?.item
+                if (verified != updated) {
+                    return "把“${item.name}”改回未用完状态失败，数据没有确认写入。"
+                }
                 rememberItem(item.id)
                 "已把“${item.name}”改回未用完状态，原来的评价也已清空。"
             }
             "discarded", "丢弃", "废弃" -> {
-                itemDao.update(item.copy(status = Item.STATUS_DISCARDED))
+                val updated = item.copy(status = Item.STATUS_DISCARDED)
+                itemDao.update(updated)
+                val verified = itemDao.getItemDetailById(item.id).firstOrNull()?.item
+                if (verified != updated) {
+                    return "标记“${item.name}”为已丢弃失败，数据没有确认写入。"
+                }
                 rememberItem(item.id)
                 "已把“${item.name}”标记为已丢弃。"
             }
@@ -355,14 +363,17 @@ class InventoryAgentTool @Inject constructor(
             return "要给“${item.name}”写评价的话，请告诉我几星，或者评价内容。"
         }
 
-        itemDao.update(
-            item.copy(
-                status = Item.STATUS_USED_UP,
-                rating = fixedRating,
-                ratedAt = System.currentTimeMillis(),
-                reviewNote = note.ifBlank { item.reviewNote }
-            )
+        val updated = item.copy(
+            status = Item.STATUS_USED_UP,
+            rating = fixedRating,
+            ratedAt = System.currentTimeMillis(),
+            reviewNote = note.ifBlank { item.reviewNote }
         )
+        itemDao.update(updated)
+        val verified = itemDao.getItemDetailById(item.id).firstOrNull()?.item
+        if (verified != updated) {
+            return "给“${item.name}”保存评价失败，数据没有确认写入。"
+        }
         rememberItem(item.id)
         return "已给“${item.name}”保存评价${formatOptionalReview(fixedRating, note)}。"
     }
@@ -371,6 +382,9 @@ class InventoryAgentTool @Inject constructor(
         val itemDetail = resolveSingleItem(keyword).getOrElse { return it.message.orEmpty() }
         val item = itemDetail.item
         itemDao.moveToTrash(item.id, System.currentTimeMillis())
+        if (itemDao.getItemById(item.id) != null) {
+            return "把“${item.name}”移到回收站失败，数据没有确认写入。"
+        }
         rememberItem(item.id)
         return "已把“${item.name}”移到回收站，30 天内还可以恢复。"
     }
@@ -382,7 +396,14 @@ class InventoryAgentTool @Inject constructor(
         val existing = categories.firstOrNull { it.name.equals(normalized, ignoreCase = true) }
         if (existing != null) return "“${existing.name}”这个分类已经存在了。"
 
-        categoryDao.insert(Category(name = normalized, icon = icon.trim()))
+        val insertedId = categoryDao.insert(Category(name = normalized, icon = icon.trim()))
+        val verified = categoryDao.getCategoryById(insertedId)
+        if (verified == null ||
+            !verified.name.equals(normalized, ignoreCase = true) ||
+            verified.icon != icon.trim()
+        ) {
+            return "添加物品分类“$normalized”失败，数据没有确认写入。"
+        }
         return "已添加物品分类“$normalized”。"
     }
 
@@ -396,6 +417,9 @@ class InventoryAgentTool @Inject constructor(
         }
 
         categoryDao.delete(category)
+        if (categoryDao.getCategoryById(category.id) != null) {
+            return "删除物品分类“${category.name}”失败，数据没有确认写入。"
+        }
         return "已删除物品分类“${category.name}”。"
     }
 
@@ -420,7 +444,11 @@ class InventoryAgentTool @Inject constructor(
             return "$parentText 已经有“${duplicate.name}”这个位置了。"
         }
 
-        locationDao.insert(Location(name = normalized, parentId = parent?.id))
+        val insertedId = locationDao.insert(Location(name = normalized, parentId = parent?.id))
+        val verified = locationDao.getLocationById(insertedId)
+        if (verified == null || !verified.name.equals(normalized, ignoreCase = true) || verified.parentId != parent?.id) {
+            return "添加位置“$normalized”失败，数据没有确认写入。"
+        }
         return if (parent == null) {
             "已在最外层添加位置“$normalized”。"
         } else {
@@ -440,10 +468,12 @@ class InventoryAgentTool @Inject constructor(
             it.parentId == null && it.name.equals(sceneName, ignoreCase = true)
         }
         val createdRoot = root == null
+        val createdLocations = mutableListOf<Location>()
         if (root == null) {
             val rootId = locationDao.insert(Location(name = sceneName, parentId = null))
             root = Location(id = rootId, name = sceneName, parentId = null)
             existingLocations += root
+            createdLocations += root
         }
         val sceneRoot = requireNotNull(root)
 
@@ -470,9 +500,17 @@ class InventoryAgentTool @Inject constructor(
                     val id = locationDao.insert(Location(name = cleanPart, parentId = parent.id))
                     val created = Location(id = id, name = cleanPart, parentId = parent.id)
                     existingLocations += created
+                    createdLocations += created
                     addedPaths += locationPath(created, existingLocations)
                     parent = created
                 }
+            }
+        }
+
+        if (createdLocations.isNotEmpty()) {
+            val verifiedById = locationDao.getAllLocationsSnapshot().associateBy { it.id }
+            if (createdLocations.any { verifiedById[it.id] != it }) {
+                return "添加场景“$sceneName”失败，数据没有确认写入。"
             }
         }
 
@@ -514,6 +552,9 @@ class InventoryAgentTool @Inject constructor(
         }
 
         locationDao.delete(location)
+        if (locationDao.getLocationById(location.id) != null) {
+            return "删除位置“${locationPath(location, locations)}”失败，数据没有确认写入。"
+        }
         return "已删除位置“${locationPath(location, locations)}”。"
     }
 
@@ -602,6 +643,10 @@ class InventoryAgentTool @Inject constructor(
             .count { it.item.locationId in descendants }
 
         locationDao.delete(location)
+        val remainingIds = locationDao.getAllLocationsSnapshot().map { it.id }.toSet()
+        if (descendants.any { it in remainingIds }) {
+            return "删除位置树“$targetPath”失败，数据没有确认写入。"
+        }
         pendingDeleteLocationPath = null
         return "已删除位置树“$targetPath”，共删除 ${descendants.size} 个位置（包含 $childCount 个子位置）。这些位置里的 $itemCount 件物品没有删除，只是位置变成未设置。"
     }
@@ -974,6 +1019,8 @@ class InventoryAgentTool @Inject constructor(
             .trim('/', '\\', ' ', '　')
             .replace(Regex("\\s*(/|\\\\|>|＞|→|->|—|－)\\s*"), " / ")
             .replace(Regex("\\s+"), " ")
+            .replace(Regex("^(在|到|进|去|往|向)"), "")
+            .replace(Regex("(里面|里边|里|那边|这边|这里|这儿|旁边|附近)$"), "")
             .trim()
     }
 

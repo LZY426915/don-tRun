@@ -16,7 +16,11 @@ import {
 } from "./http.js";
 import { createRateLimiter, RATE_LIMITS } from "./limits.js";
 import { forwardDeepSeek, openDeepSeekStream } from "./providers/deepseek.js";
-import { forwardQwen, type QwenPurpose } from "./providers/qwen.js";
+import {
+  forwardQwen,
+  issueQwenRealtimeToken,
+  type QwenPurpose
+} from "./providers/qwen.js";
 import {
   geocode,
   locateIp,
@@ -137,6 +141,22 @@ export function createRouter(
           fetchImpl
         );
         sendJson(response, providerResponse.status, providerResponse.body);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        path === "/v1/qwen/asr-token" &&
+        installationHash
+      ) {
+        limiter.assertWithinLimit(`media:${installationHash}`, RATE_LIMITS.media);
+        const parsed = await readJsonBody(request, 4 * 1024);
+        payloadSize = parsed.byteLength;
+        if (!isRecord(parsed.value)) {
+          throw new ApiError(400, "INVALID_REQUEST", "The request body must be an object.");
+        }
+        const token = await issueQwenRealtimeToken(deps.config, requestId, fetchImpl);
+        sendJson(response, 200, token);
         return;
       }
 

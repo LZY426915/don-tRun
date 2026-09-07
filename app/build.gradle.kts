@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,35 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt.android)
+}
+
+afterEvaluate {
+    tasks.named<Test>("testDebugUnitTest") {
+        testClassesDirs = files(
+            layout.buildDirectory.dir("tmp/kotlin-classes/debugUnitTest")
+        )
+        classpath = files(classpath, testClassesDirs)
+    }
+    tasks.register<JavaExec>("runDebugUnitTestsDirect") {
+        dependsOn("transformDebugUnitTestClassesWithAsm")
+        mainClass.set("org.junit.runner.JUnitCore")
+        val testTask = tasks.named<Test>("testDebugUnitTest").get()
+        classpath = files(
+            testTask.classpath,
+            layout.buildDirectory.dir("tmp/kotlin-classes/debugUnitTest")
+        )
+        doFirst {
+            val testRoot = layout.buildDirectory.dir("tmp/kotlin-classes/debugUnitTest").get().asFile
+            val testNames = fileTree(testRoot)
+                .matching {
+                    include("**/*Test.class")
+                }
+                .files
+                .map { it.relativeTo(testRoot).invariantSeparatorsPath.removeSuffix(".class").replace('/', '.') }
+                .sorted()
+            args = testNames
+        }
+    }
 }
 
 fun String.toBuildConfigString(): String {
@@ -30,6 +61,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+        }
+
         release {
             isMinifyEnabled = true
             isShrinkResources = true

@@ -177,9 +177,10 @@ class SaveViewModel @Inject constructor(
                     val matchedLocation = result.locationName?.let { predicted ->
                         findBestLocation(leafLocations, predicted)
                     }
+                    val recognizedName = result.name.trim()
                     val current = _state.value
                     _state.value = current.copy(
-                        name = result.name.takeIf { it.isNotBlank() } ?: current.name,
+                        name = recognizedName.takeIf { it.isNotBlank() } ?: current.name,
                         categoryId = matchedCategory?.id ?: current.categoryId,
                         locationId = matchedLocation?.id ?: current.locationId,
                         quantity = result.quantity?.coerceAtLeast(1) ?: current.quantity,
@@ -187,10 +188,14 @@ class SaveViewModel @Inject constructor(
                         expireTime = result.expireDays
                             ?.takeIf { it > 0 }
                             ?.toLong()
-                            ?.let(DateUtil::daysFromNow) ?: current.expireTime,
+                        ?.let(DateUtil::daysFromNow) ?: current.expireTime,
                         note = result.note ?: current.note,
                         isAiRecognizing = false,
-                        aiMessage = "AI 已填入识别结果"
+                        aiMessage = if (recognizedName.isBlank()) {
+                            "AI 未识别到物品名称，请手动填写"
+                        } else {
+                            "AI 已填入识别结果"
+                        }
                     )
                 }
                 .onFailure { throwable ->

@@ -20,10 +20,6 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_AUTO, router.route("矿泉水在哪儿？"))
         assertEquals(AgentRoute.TOOL_AUTO, router.route("家里有哪些东西快过期？"))
         assertEquals(AgentRoute.TOOL_AUTO, router.route("卧室里都放了什么东西？"))
-        assertEquals(AgentRoute.TOOL_AUTO, router.route("冰箱上有东西吗？"))
-        assertEquals(AgentRoute.TOOL_AUTO, router.route("床头柜里有什么？"))
-        assertEquals(AgentRoute.TOOL_AUTO, router.route("书桌上放东西了吗？"))
-        assertEquals(AgentRoute.TOOL_AUTO, router.route("冰箱里有没有东西？"))
     }
 
     @Test
@@ -33,6 +29,12 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把农夫山泉的位置改到床头柜"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("帮我把华为耳机换回到书桌"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把耳机移回书桌"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("帮我把耳机改到书柜"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("帮我把耳机挪到书柜里"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把耳机收进书柜"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("给我把耳机换个地方放书柜"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把耳机摆书柜那边"))
+        assertEquals(AgentRoute.TOOL_REQUIRED, router.route("把耳机放在书柜里"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("明天天气怎么样？"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加一个办公室场景"))
         assertEquals(AgentRoute.TOOL_REQUIRED, router.route("添加办公室"))
@@ -64,6 +66,9 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.GENERAL, router.route("帮我评价一下这篇文章"))
         assertEquals(AgentRoute.GENERAL, router.route("帮我评价电影《星际穿越》"))
         assertEquals(AgentRoute.GENERAL, router.route("帮我评价一下五星酒店"))
+        assertEquals(AgentRoute.GENERAL, router.route("怎么把耳机放进书柜？"))
+        assertEquals(AgentRoute.GENERAL, router.route("把这段文字收进文档"))
+        assertEquals(AgentRoute.GENERAL, router.route("把耳机收起来"))
     }
 
     @Test

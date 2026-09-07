@@ -225,6 +225,80 @@ class InventoryAgentToolLocationTest {
         assertTrue(result.contains("华为蓝牙耳机充电仓"))
     }
 
+    @Test
+    fun moveItemToLocation_normalizesColloquialDestinationParticles() = runTest {
+        val locations = listOf(
+            Location(id = 1, name = "我的家"),
+            Location(id = 2, name = "书房", parentId = 1),
+            Location(id = 3, name = "书柜", parentId = 2)
+        )
+        var stored = Item(id = 7, name = "耳机", locationId = 1)
+        val itemDao = proxy<ItemDao> { method, args ->
+            when (method) {
+                "getAllItems" -> flowOf(listOf(ItemDetail(stored, locationName = pathFor(stored.locationId, locations))))
+                "getItemDetailById" -> flowOf(ItemDetail(stored, locationName = pathFor(stored.locationId, locations)))
+                "update" -> {
+                    stored = args.first() as Item
+                    Unit
+                }
+                else -> error("Unexpected ItemDao call: $method")
+            }
+        }
+        val locationDao = proxy<LocationDao> { method, _ ->
+            when (method) {
+                "getAllLocationsSnapshot" -> locations
+                else -> error("Unexpected LocationDao call: $method")
+            }
+        }
+        val tool = InventoryAgentTool(
+            itemDao,
+            proxy<CategoryDao> { method, _ -> error("Unexpected CategoryDao call: $method") },
+            locationDao
+        )
+
+        val result = tool.moveItemToLocation("耳机", "书柜里")
+
+        assertEquals(3L, stored.locationId)
+        assertTrue(result.contains("我的家 / 书房 / 书柜"))
+    }
+
+    @Test
+    fun moveItemToLocation_normalizesLeadingPrepositionAndInnerParticle() = runTest {
+        val locations = listOf(
+            Location(id = 1, name = "我的家"),
+            Location(id = 2, name = "书房", parentId = 1),
+            Location(id = 3, name = "书柜", parentId = 2)
+        )
+        var stored = Item(id = 7, name = "耳机", locationId = 1)
+        val itemDao = proxy<ItemDao> { method, args ->
+            when (method) {
+                "getAllItems" -> flowOf(listOf(ItemDetail(stored, locationName = pathFor(stored.locationId, locations))))
+                "getItemDetailById" -> flowOf(ItemDetail(stored, locationName = pathFor(stored.locationId, locations)))
+                "update" -> {
+                    stored = args.first() as Item
+                    Unit
+                }
+                else -> error("Unexpected ItemDao call: $method")
+            }
+        }
+        val locationDao = proxy<LocationDao> { method, _ ->
+            when (method) {
+                "getAllLocationsSnapshot" -> locations
+                else -> error("Unexpected LocationDao call: $method")
+            }
+        }
+        val tool = InventoryAgentTool(
+            itemDao,
+            proxy<CategoryDao> { method, _ -> error("Unexpected CategoryDao call: $method") },
+            locationDao
+        )
+
+        val result = tool.moveItemToLocation("耳机", "在书柜里面")
+
+        assertEquals(3L, stored.locationId)
+        assertTrue(result.contains("我的家 / 书房 / 书柜"))
+    }
+
     private fun pathFor(locationId: Long?, locations: List<Location>): String? {
         var current = locations.firstOrNull { it.id == locationId } ?: return null
         val names = mutableListOf(current.name)

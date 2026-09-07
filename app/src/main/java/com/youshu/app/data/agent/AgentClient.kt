@@ -66,6 +66,11 @@ class AgentClient @Inject constructor(
     ): Flow<AgentReplyEvent> = flow {
         val recentItemContext = inventoryTool.getRecentItemContext()
         val pendingLocationSelection = inventoryTool.isPendingItemLocationChoice(newMessage)
+        if (!pendingLocationSelection && inventoryTool.isPendingItemLocationAmbiguousReply(newMessage)) {
+            emit(AgentReplyEvent.AppendText(inventoryTool.pendingItemLocationChoicePrompt()))
+            emit(AgentReplyEvent.Completed)
+            return@flow
+        }
         val route = if (pendingLocationSelection) {
             AgentRoute.TOOL_REQUIRED
         } else {
@@ -75,7 +80,8 @@ class AgentClient @Inject constructor(
             )
         }
         val locationTreeContext = inventoryTool.getLocationTreeContext()
-        val toolNudge = when {
+        val conversationCityContext = buildConversationCityContext(history, newMessage)
+        val baseToolNudge = when {
             pendingLocationSelection -> ToolNudge(
                 text = "用户正在回答上一轮的末级位置选择。必须调用 update_item_location：keyword 留空以使用待处理物品；target_location 根据用户本条回复填写，用户回复序号时原样传入。工具返回后再确认结果。",
                 allowedToolNames = setOf("update_item_location"),
@@ -83,6 +89,10 @@ class AgentClient @Inject constructor(
             )
             route == AgentRoute.GENERAL -> null
             else -> buildToolNudge(newMessage)
+        }
+        val toolNudge = baseToolNudge?.let { nudge ->
+            val text = listOfNotNull(conversationCityContext, nudge.text).joinToString("\n")
+            nudge.copy(text = text)
         }
         val requestLocationTree = locationTreeContext.takeUnless { toolNudge?.hideLocationTree == true }
         val toolMessages = mutableListOf<JsonObject>()
@@ -139,8 +149,10 @@ class AgentClient @Inject constructor(
                     continue
                 }
 
+                val hasMutationResult = allToolResults.any { (toolCall, _) -> isMutationTool(toolCall.name) }
                 val shouldReplaceVisibleAnswer = allToolResults.isNotEmpty() && (
-                    shouldPreferToolResult(round.text, allToolResults) ||
+                    hasMutationResult ||
+                        shouldPreferToolResult(round.text, allToolResults) ||
                         (isWeatherToolResult(allToolResults) && isRawWeatherToolAnswer(round.text))
                     )
                 if (shouldReplaceVisibleAnswer) {
@@ -195,7 +207,7 @@ class AgentClient @Inject constructor(
                 else -> emptySet()
             }
             val nextNudge = if (needsWeatherTool) {
-                buildNextToolNudge(toolNudge, toolResults)
+                buildNextToolNudge(toolNudge, toolResults, newMessage)
             } else if (needsAllowedMutationTool) {
                 "物品查询只是中间步骤，用户要求的修改还没有完成。现在必须调用 ${nextAllowed.joinToString()} 执行真实修改；依据查询结果填写物品参数，依据用户原话填写目标位置。不能只口头说已经完成。"
             } else {
@@ -330,7 +342,7 @@ class AgentClient @Inject constructor(
         toolResults: List<Pair<ToolCall, String>>,
         onEvent: suspend (AgentReplyEvent) -> Unit
     ) {
-        val answer = buildWeatherFallbackAnswer(toolResults)
+        val answer = buildWeatherFallbackAnswer(userMessage, toolResults)
             ?: buildToolFallbackAnswer(userMessage, toolResults)
             ?: "工具已经执行，但暂时没能整理成完整回答。你可以查看 App 中的最新数据。"
         onEvent(AgentReplyEvent.AppendText(answer))
@@ -499,7 +511,8 @@ class AgentClient @Inject constructor(
 
     private fun buildNextToolNudge(
         toolNudge: ToolNudge?,
-        toolResults: List<Pair<ToolCall, String>>
+        toolResults: List<Pair<ToolCall, String>>,
+        userMessage: String
     ): String? {
         if (toolNudge?.flow != ToolFlow.Weather) return null
         val names = toolResults.map { it.first.name }.toSet()
@@ -508,7 +521,7 @@ class AgentClient @Inject constructor(
                 "已经拿到真实天气。现在必须调用 find_weather_items 查家里是否有这次建议可能用到的物品，例如雨伞、外套、防晒霜、帽子、水杯等；不要直接回答。"
             }
             "find_weather_items" in names -> {
-                "现在不要再调用工具。请基于真实天气和物品候选，用自然中文回答用户：说明明天天气、穿衣/饮食/带伞/防晒建议；如果候选里有相关物品就告诉用户放在哪里，没有就自然说目前没在对应地点找到。不要输出工具原文、数据源说明或“请结合上述”。"
+                "现在不要再调用工具。请基于真实天气和物品候选，用自然中文回答用户：说明${weatherPeriodLabel(userMessage)}天气、穿衣/饮食/带伞/防晒建议；如果候选里有相关物品就告诉用户放在哪里，没有就自然说目前没在对应地点找到。不要输出工具原文、数据源说明或“请结合上述”。"
             }
             else -> null
         }
@@ -520,6 +533,45 @@ class AgentClient @Inject constructor(
     ): Boolean {
         val nextAllowed = nextAllowedToolNames(toolNudge, toolResults)
         return nextAllowed != emptySet<String>()
+    }
+
+    private fun buildConversationCityContext(
+        history: List<ChatMessage>,
+        newMessage: String
+    ): String? {
+        if (!isWeatherRelatedMessage(newMessage)) return null
+        val city = inferDeclaredCity(history, newMessage) ?: return null
+        return "本轮对话中用户已明确所在城市是“$city”。如果用户没有另说城市，天气工具必须优先使用 city=\"$city\"；不要因为用户没有开启定位就忘记这个城市。"
+    }
+
+    private fun inferDeclaredCity(
+        history: List<ChatMessage>,
+        newMessage: String
+    ): String? {
+        val userTexts = history
+            .filter { it.role == ChatRole.USER && it.status == ChatMessageStatus.NORMAL }
+            .map { it.content } + newMessage
+        return userTexts
+            .asReversed()
+            .firstNotNullOfOrNull(::extractDeclaredCity)
+    }
+
+    private fun extractDeclaredCity(message: String): String? {
+        val match = Regex("""(?:我(?:现在)?在|我人在|人在|城市是|定位到)([\u4e00-\u9fa5]{2,8})(?:市)?""")
+            .find(message)
+            ?: return null
+        return match.groupValues
+            .getOrNull(1)
+            ?.trim()
+            ?.trimEnd('市')
+            ?.takeIf { it.length in 2..8 }
+    }
+
+    private fun isWeatherRelatedMessage(message: String): Boolean {
+        return listOf(
+            "天气", "气温", "温度", "冷不冷", "热不热", "穿什么", "穿衣",
+            "穿搭", "带伞", "下雨", "下雪", "防晒", "出门", "饮食", "吃什么"
+        ).any { message.contains(it) }
     }
 
     // ──────────────────────────────────────────
@@ -548,8 +600,8 @@ class AgentClient @Inject constructor(
             "确认", "确定", "同意", "删吧", "都删了", "继续删", "可以删"
         ).any { text.contains(it) }
         val hasQueryWord = listOf(
-            "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么", "有啥",
-            "有东西", "有物品", "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
+            "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么",
+            "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
         ).any { text.contains(it) }
         val isLocationMove = AgentIntentPatterns.isItemLocationMove(text)
         if (!hasMutationWord && !hasQueryWord && !isLocationMove) return null
@@ -573,7 +625,7 @@ class AgentClient @Inject constructor(
             isLocationMove -> {
                 allowedToolNames = setOf("update_item_location")
                 requiresToolCall = true
-                "update_item_location。keyword 传物品名或关键词；target_location 传目标末级位置的完整路径或名称。必须以工具回查结果判断是否修改成功。"
+                "update_item_location。keyword 传物品名或关键词；target_location 传目标末级位置的完整路径或名称。用户说“里/里面/那边”等口语后缀时，只取真实位置名称，不要把后缀当成位置名。必须以工具回查结果判断是否修改成功。"
             }
             listOf("位置", "存放", "地点", "地方", "区域", "房间", "下面", "下一级").any { text.contains(it) } &&
                 listOf("添加", "新增", "加上", "创建", "建立").any { text.contains(it) } -> {
@@ -637,11 +689,11 @@ class AgentClient @Inject constructor(
                 requiresToolCall = true
                 "get_used_up_items。"
             }
-            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存", "有东西", "有物品", "有啥").any { text.contains(it) } &&
+            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存").any { text.contains(it) } &&
                 !isUserLocationMetaQuestion(text) -> {
                 allowedToolNames = setOf("search_items", "find_related_items", "get_items_by_location")
                 requiresToolCall = false
-                "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么、有没有东西时调用 get_items_by_location。"
+                "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么时调用 get_items_by_location。"
             }
             else -> return null
         }
@@ -737,7 +789,7 @@ class AgentClient @Inject constructor(
                 "get_items_by_location" -> {
                     val location = args["location"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     val items = inventoryTool.getItemsByLocationSnapshot(location)
-                    formatLocationResults(items, location, inventoryTool.locationExists(location))
+                    formatLocationResults(items, location)
                 }
                 "get_expiring_items" -> {
                     val days = args["days"]?.jsonPrimitive?.intOrNull ?: 7
@@ -975,17 +1027,9 @@ class AgentClient @Inject constructor(
         return null
     }
 
-    private fun formatLocationResults(
-        items: List<ItemDetail>,
-        location: String,
-        locationExists: Boolean
-    ): String {
+    private fun formatLocationResults(items: List<ItemDetail>, location: String): String {
         if (items.isEmpty()) {
-            return if (locationExists) {
-                "在\"$location\"没有找到任何物品。"
-            } else {
-                "目前还没有\"$location\"这个地点，需要帮您添加吗？"
-            }
+            return "在\"$location\"没有找到任何物品。"
         }
         return buildString {
             appendLine("在\"$location\"找到 ${items.size} 件物品：")
@@ -1111,6 +1155,7 @@ class AgentClient @Inject constructor(
     }
 
     private fun buildWeatherFallbackAnswer(
+        userMessage: String,
         toolResults: List<Pair<ToolCall, String>>
     ): String? {
         if (!isWeatherToolResult(toolResults)) return null
@@ -1122,15 +1167,16 @@ class AgentClient @Inject constructor(
             .lastOrNull { it.first.name == "find_weather_items" }
             ?.second
             .orEmpty()
-        val tomorrow = weatherText.lineSequence()
-            .firstOrNull { it.startsWith("明天预报：") }
-            ?.removePrefix("明天预报：")
+        val period = weatherPeriodLabel(userMessage)
+        val forecast = weatherText.lineSequence()
+            .firstOrNull { it.startsWith("${period}预报：") }
+            ?.removePrefix("${period}预报：")
             .orEmpty()
-        if (tomorrow.isBlank()) return null
+        if (forecast.isBlank()) return null
 
-        val needsUmbrella = tomorrow.contains("雨")
+        val needsUmbrella = forecast.contains("雨")
         val hot = Regex("""(\d+)℃""")
-            .findAll(tomorrow)
+            .findAll(forecast)
             .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
             .any { it >= 30 }
         val itemLine = when {
@@ -1140,8 +1186,10 @@ class AgentClient @Inject constructor(
         }
         val umbrellaText = if (needsUmbrella) "可能有雨，出门最好带伞。" else "看起来不太像要下雨，伞可以按你出门时长决定。"
         val hotText = if (hot) "温度偏高，穿轻薄透气一点，注意补水和防晒。" else "穿常规轻便衣服就行，早晚可以备一件薄外套。"
-        return "明天预报：$tomorrow。$hotText $umbrellaText $itemLine".trim()
+        return "${period}预报：$forecast。$hotText $umbrellaText $itemLine".trim()
     }
+
+    private fun weatherPeriodLabel(message: String): String = if (message.contains("明天")) "明天" else "今天"
 
     private fun isMutationTool(name: String): Boolean {
         return name in setOf(
@@ -1336,7 +1384,6 @@ class AgentClient @Inject constructor(
 - 永远基于工具返回的数据说话，不要编造。
 - 同一轮对话里，工具返回结果是最高优先级；如果工具说“已添加/已删除/已保存”，就按这个结果回复，不要再根据位置树或历史消息改口说“原本已经存在”。
 - 如果工具返回空结果，如实告诉用户没找到，可以建议用户先录入物品。
-- 当用户询问某个地点/位置里有什么、东西在哪时，调用 get_items_by_location。如果 get_items_by_location 返回“目前还没有……这个地点，需要帮您添加吗？”，就把这句话原样转达给用户并询问是否需要添加；不要编造该地点存在，也不要用“稍等/我帮你看看”敷衍了事却没有下文。
 - search_items 可以搜索名称、分类、位置、备注。
 - 当用户用的是泛称、别名、品牌和品类可能不一致的说法时，例如“矿泉水”对应“农夫山泉/怡宝”，“纸巾”对应“抽纸/卷纸”，“充电器”对应“充电头/数据线”，优先调用 find_related_items 做语义候选筛选；如果 search_items 返回空结果，也必须再调用 find_related_items 后才能说没找到。
 - find_related_items 返回的是候选池，不是最终结果。你要按用户问题的意思从候选池中挑出真正相关的物品，列出名称、完整位置、分类、数量、状态、备注/过期等关键信息；如果多件都相关，全部列出并请用户选择。
@@ -1421,7 +1468,7 @@ class AgentClient @Inject constructor(
                     put("type", "function")
                     putJsonObject("function") {
                         put("name", "get_items_by_location")
-                        put("description", "查询某个位置下的所有物品。支持子位置递归，如\"卧室\"会包含床头柜、衣柜等子位置。如果该位置不存在，工具会返回“目前还没有这个地点，需要帮您添加吗”的提示，此时应把该提示转达给用户并询问是否添加。")
+                        put("description", "查询某个位置下的所有物品。支持子位置递归，如\"卧室\"会包含床头柜、衣柜等子位置。")
                         putJsonObject("parameters") {
                             put("type", "object")
                             putJsonObject("properties") {

@@ -2,13 +2,17 @@ package com.youshu.app.ui.screen.agent
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -24,10 +28,14 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +51,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -50,6 +59,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -84,19 +94,28 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -108,7 +127,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import com.youshu.app.data.agent.AgentItemCard
 import com.youshu.app.data.agent.ChatConversation
@@ -126,11 +147,14 @@ import com.youshu.app.ui.theme.TextHint
 import com.youshu.app.ui.theme.TextPrimary
 import com.youshu.app.ui.theme.TextSecondary
 import com.youshu.app.util.ImageUtil
+import com.youshu.app.util.RealtimeQwenAsrClient
 import com.youshu.app.util.WavAudioRecorder
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.launch
 
 private val recommendedQuestions = listOf(
     "冰箱里有什么快过期？",
@@ -140,18 +164,25 @@ private val recommendedQuestions = listOf(
     "牛奶还有多久过期？"
 )
 
+private enum class VoiceGestureTarget {
+    Normal,
+    Cancel,
+    Edit
+}
+
 @Composable
 fun AgentChatScreen(
+    viewModel: com.youshu.app.ui.viewmodel.AgentChatViewModel,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val viewModel: com.youshu.app.ui.viewmodel.AgentChatViewModel = hiltViewModel()
-
+    val lifecycleOwner = LocalLifecycleOwner.current
     val conversations by viewModel.conversations.collectAsState()
     val activeConversation by viewModel.activeConversation.collectAsState()
     val isReplying by viewModel.isReplying.collectAsState()
     val isTranscribingVoice by viewModel.isTranscribingVoice.collectAsState()
+    val pendingVoiceTranscript by viewModel.pendingVoiceTranscript.collectAsState()
     val historyVisible by viewModel.historyVisible.collectAsState()
     val searchKeyword by viewModel.searchKeyword.collectAsState()
 
@@ -163,8 +194,15 @@ fun AgentChatScreen(
     var pendingWeatherQuestionAfterLocationPermission by remember { mutableStateOf<String?>(null) }
     var cameraOutputUri by remember { mutableStateOf<Uri?>(null) }
     var isRecordingVoice by remember { mutableStateOf(false) }
+    var voiceGestureTarget by remember { mutableStateOf(VoiceGestureTarget.Normal) }
+    var voiceProcessingTarget by remember { mutableStateOf(VoiceGestureTarget.Normal) }
+    var voiceLiveTranscript by remember { mutableStateOf("") }
     var voiceRecordingStartAt by remember { mutableStateOf(0L) }
     val voiceRecorder = remember(context) { WavAudioRecorder(context.applicationContext) }
+    val realtimeAsr = remember(context, viewModel) {
+        RealtimeQwenAsrClient(tokenProvider = { viewModel.requestQwenRealtimeToken() })
+    }
+    val voiceCoroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var compensatedKeyboardOffsetPx by remember { mutableStateOf(0f) }
     val keyboardOffset by animateDpAsState(
@@ -236,28 +274,74 @@ fun AgentChatScreen(
             Toast.makeText(context, "小东西正在处理上一条消息", Toast.LENGTH_SHORT).show()
             return
         }
-        runCatching {
-            voiceRecorder.start()
-        }.onSuccess {
-            voiceRecordingStartAt = System.currentTimeMillis()
-            isRecordingVoice = true
-            attachmentsExpanded = false
-            Toast.makeText(context, "正在录音，再点一次结束", Toast.LENGTH_SHORT).show()
-        }.onFailure { error ->
-            Toast.makeText(context, error.message ?: "录音启动失败", Toast.LENGTH_SHORT).show()
+        voiceRecordingStartAt = System.currentTimeMillis()
+        isRecordingVoice = true
+        voiceLiveTranscript = ""
+        voiceGestureTarget = VoiceGestureTarget.Normal
+        attachmentsExpanded = false
+
+        realtimeAsr.start(
+            onPartialText = { transcript ->
+                if (isRecordingVoice && transcript.isNotBlank()) voiceLiveTranscript = transcript
+            },
+            onFinalText = { transcript ->
+                if (isRecordingVoice && transcript.isNotBlank()) voiceLiveTranscript = transcript
+            },
+            onError = { /* Keep WAV capture alive; release-time batch ASR is the fallback. */ }
+        )
+        val file = runCatching {
+            voiceRecorder.start(onPcmChunk = realtimeAsr::sendPcm)
+        }.getOrNull()
+        if (file == null) {
+            realtimeAsr.cancel()
+            isRecordingVoice = false
+            Toast.makeText(context, "录音启动失败，请检查麦克风权限", Toast.LENGTH_SHORT).show()
         }
     }
 
-    fun stopVoiceRecording() {
+    fun stopVoiceRecording(target: VoiceGestureTarget = VoiceGestureTarget.Normal) {
         val file = voiceRecorder.stop()
         isRecordingVoice = false
+        voiceProcessingTarget = target
+        voiceGestureTarget = VoiceGestureTarget.Normal
         val elapsed = System.currentTimeMillis() - voiceRecordingStartAt
-        if (file == null || !file.exists() || file.length() < WavAudioRecorder.MIN_AUDIO_BYTES || elapsed < 500) {
-            Toast.makeText(context, "录音太短，再说一次试试", Toast.LENGTH_SHORT).show()
-            return
+        voiceCoroutineScope.launch {
+            val realtimeTranscript = realtimeAsr.finish()?.trim().orEmpty()
+            if (realtimeTranscript.isNotBlank() && target != VoiceGestureTarget.Cancel) {
+                voiceLiveTranscript = realtimeTranscript
+                viewModel.submitRecognizedVoiceTranscript(
+                    transcript = realtimeTranscript,
+                    openEditorAfterTranscription = target == VoiceGestureTarget.Edit
+                )
+                return@launch
+            }
+            if (
+                file == null ||
+                !file.exists() ||
+                file.length() < WavAudioRecorder.MIN_AUDIO_BYTES ||
+                elapsed < 500
+            ) {
+                runCatching { file?.delete() }
+                voiceLiveTranscript = ""
+                Toast.makeText(context, "录音太短，再说一次试试", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            // The original Qwen WAV transcription remains the only fallback when
+            // realtime did not produce a completed transcript.
+            viewModel.submitVoiceMessage(
+                audioPath = file.absolutePath,
+                openEditorAfterTranscription = target == VoiceGestureTarget.Edit
+            )
         }
-        Toast.makeText(context, "正在识别语音", Toast.LENGTH_SHORT).show()
-        viewModel.submitVoiceMessage(file.absolutePath)
+    }
+
+    fun cancelVoiceRecording() {
+        realtimeAsr.cancel()
+        voiceRecorder.cancel()
+        isRecordingVoice = false
+        voiceLiveTranscript = ""
+        voiceGestureTarget = VoiceGestureTarget.Normal
+        Toast.makeText(context, "已取消本次语音", Toast.LENGTH_SHORT).show()
     }
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
@@ -284,11 +368,7 @@ fun AgentChatScreen(
         }
     }
 
-    fun toggleVoiceRecording() {
-        if (isRecordingVoice) {
-            stopVoiceRecording()
-            return
-        }
+    fun requestVoiceRecordingStart() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startVoiceRecording()
         } else {
@@ -301,7 +381,7 @@ fun AgentChatScreen(
         val originalSoftInputMode = window?.attributes?.softInputMode
         if (window != null && originalSoftInputMode != null) {
             val withoutAdjust = originalSoftInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST.inv()
-            window.setSoftInputMode(withoutAdjust or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+            window.setSoftInputMode(withoutAdjust or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
         onDispose {
             if (window != null && originalSoftInputMode != null) {
@@ -310,11 +390,37 @@ fun AgentChatScreen(
         }
     }
 
-    DisposableEffect(voiceRecorder) {
-        onDispose {
-            if (voiceRecorder.isRecording) {
-                voiceRecorder.stop()
+    val stopRecordingUpdated by rememberUpdatedState {
+        stopVoiceRecording(VoiceGestureTarget.Normal)
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+                if (intent.action == Intent.ACTION_SCREEN_OFF && (voiceRecorder.isRecording || isRecordingVoice)) {
+                    stopRecordingUpdated()
+                }
             }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && (voiceRecorder.isRecording || isRecordingVoice)) {
+                stopRecordingUpdated()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(Intent.ACTION_SCREEN_OFF),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            runCatching { context.unregisterReceiver(receiver) }
+            if (voiceRecorder.isRecording || isRecordingVoice) {
+                stopRecordingUpdated()
+            }
+            realtimeAsr.cancel()
         }
     }
 
@@ -405,6 +511,10 @@ fun AgentChatScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .offset(y = -keyboardOffset)
+                .then(
+                    if (isRecordingVoice || isTranscribingVoice) Modifier.blur(6.dp)
+                    else Modifier
+                )
         ) {
             AgentTopBar(
                 onBack = onBack,
@@ -458,10 +568,21 @@ fun AgentChatScreen(
                 onToggleAttachments = { attachmentsExpanded = !attachmentsExpanded },
                 onSend = ::submitMessage,
                 onStopGenerating = viewModel::stopGenerating,
-                onVoiceClick = {
+                onVoiceStart = {
                     attachmentsExpanded = false
-                    toggleVoiceRecording()
+                    requestVoiceRecordingStart()
                 },
+                onVoiceFinish = {
+                    if (isRecordingVoice) {
+                        stopVoiceRecording(it)
+                    }
+                },
+                onVoiceCancel = {
+                    if (isRecordingVoice) {
+                        cancelVoiceRecording()
+                    }
+                },
+                onVoiceGestureTargetChange = { voiceGestureTarget = it },
                 onTakePhoto = {
                     attachmentsExpanded = false
                     launchAgentCamera()
@@ -472,6 +593,13 @@ fun AgentChatScreen(
                 }
             )
         }
+
+        RecordingVoiceOverlay(
+            visible = isRecordingVoice || isTranscribingVoice,
+            target = if (isRecordingVoice) voiceGestureTarget else voiceProcessingTarget,
+            isProcessing = isTranscribingVoice && !isRecordingVoice,
+            transcript = voiceLiveTranscript
+        )
 
         // 历史对话侧边栏遮罩
         AnimatedVisibility(
@@ -522,6 +650,15 @@ fun AgentChatScreen(
                     }
                     pendingImageEditUri = null
                 }
+            )
+        }
+
+        pendingVoiceTranscript?.let { transcript ->
+            VoiceTranscriptEditorOverlay(
+                transcript = transcript,
+                onTranscriptChange = { },
+                onDismiss = viewModel::discardVoiceTranscript,
+                onSend = viewModel::confirmVoiceTranscript
             )
         }
     }
@@ -932,22 +1069,20 @@ private fun AgentInputBar(
     onToggleAttachments: () -> Unit,
     onSend: () -> Unit,
     onStopGenerating: () -> Unit,
-    onVoiceClick: () -> Unit,
+    onVoiceStart: () -> Unit,
+    onVoiceFinish: (VoiceGestureTarget) -> Unit,
+    onVoiceCancel: () -> Unit,
+    onVoiceGestureTargetChange: (VoiceGestureTarget) -> Unit,
     onTakePhoto: () -> Unit,
     onChooseImage: () -> Unit
 ) {
     val canSend = value.trim().isNotEmpty() || pendingImageUri != null
-    val actionIcon = when {
-        isRecordingVoice -> Icons.Default.Stop
-        isReplying -> Icons.Default.Stop
-        canSend -> Icons.AutoMirrored.Filled.Send
-        else -> Icons.Default.Mic
-    }
-    val actionDescription = when {
-        isRecordingVoice -> "结束录音"
-        isReplying -> "停止生成"
-        canSend -> "发送"
-        else -> "语音输入"
+    var textMode by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(value, pendingImageUri) {
+        if (value.isBlank() && pendingImageUri == null) {
+            textMode = false
+        }
     }
 
     Column(
@@ -961,15 +1096,15 @@ private fun AgentInputBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .shadow(
-                    elevation = 18.dp,
-                    shape = RoundedCornerShape(28.dp),
+                    elevation = 16.dp,
+                    shape = RoundedCornerShape(24.dp),
                     ambientColor = PurpleStart.copy(alpha = 0.08f),
                     spotColor = Color.Black.copy(alpha = 0.08f)
                 )
-                .clip(RoundedCornerShape(28.dp))
+                .clip(RoundedCornerShape(24.dp))
                 .background(Color.White.copy(alpha = 0.98f))
-                .border(1.dp, DividerSoft, RoundedCornerShape(28.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .border(1.dp, DividerSoft, RoundedCornerShape(24.dp))
+                .padding(horizontal = 10.dp, vertical = 9.dp)
         ) {
             pendingImageUri?.let { uri ->
                 PendingImagePreview(
@@ -979,42 +1114,54 @@ private fun AgentInputBar(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 58.dp, max = 128.dp)
-                    .padding(horizontal = 2.dp, vertical = 4.dp)
-            ) {
-                if (value.isEmpty()) {
-                    Text(
-                        text = if (isRecordingVoice) "正在听你说话，再点一次结束" else "发消息或按住说话",
-                        color = TextHint,
-                        fontSize = 15.sp
-                    )
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier
-                        .fillMaxWidth(),
-                    textStyle = TextStyle(
-                        color = TextPrimary,
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp
-                    ),
-                    cursorBrush = SolidColor(PurpleStart),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { onSend() }),
-                    minLines = 1,
-                    maxLines = 4
-                )
-            }
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Spacer(modifier = Modifier.weight(1f))
+                if (textMode || value.isNotEmpty() || pendingImageUri != null) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 42.dp, max = 112.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFFFAF8FE))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = "发消息或长按说话",
+                                color = TextHint,
+                                fontSize = 15.sp
+                            )
+                        }
+                        BasicTextField(
+                            value = value,
+                            onValueChange = onValueChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(
+                                color = TextPrimary,
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp
+                            ),
+                            cursorBrush = SolidColor(PurpleStart),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { onSend() }),
+                            minLines = 1,
+                            maxLines = 4
+                        )
+                    }
+                } else {
+                    VoiceHoldField(
+                        enabled = !isReplying,
+                        modifier = Modifier.weight(1f),
+                        onTap = { textMode = true },
+                        onVoiceStart = onVoiceStart,
+                        onVoiceFinish = onVoiceFinish,
+                        onVoiceCancel = onVoiceCancel,
+                        onVoiceTargetChange = onVoiceGestureTargetChange
+                    )
+                }
+                Spacer(modifier = Modifier.size(8.dp))
                 RoundIconButton(
                     icon = if (attachmentsExpanded) Icons.Default.Close else Icons.Default.Add,
                     contentDescription = if (attachmentsExpanded) "收起附件" else "展开附件",
@@ -1022,27 +1169,22 @@ private fun AgentInputBar(
                     iconColor = PurpleStart,
                     onClick = onToggleAttachments
                 )
-                Spacer(modifier = Modifier.size(10.dp))
-                RoundIconButton(
-                    icon = actionIcon,
-                    contentDescription = actionDescription,
-                    backgroundColor = when {
-                        isRecordingVoice -> Color(0xFFE85D75)
-                        isReplying -> PurpleStart
-                        canSend -> PurpleStart
-                        else -> Color(0xFFF8F6FC)
-                    },
-                    iconColor = if (isRecordingVoice || isReplying || canSend) Color.White else TextSecondary,
-                    onClick = {
-                        if (isReplying && !isRecordingVoice) {
-                            onStopGenerating()
-                        } else if (canSend && !isRecordingVoice) {
-                            onSend()
-                        } else {
-                            onVoiceClick()
+                if (isReplying || canSend) {
+                    Spacer(modifier = Modifier.size(8.dp))
+                    RoundIconButton(
+                        icon = if (isReplying) Icons.Default.Stop else Icons.AutoMirrored.Filled.Send,
+                        contentDescription = if (isReplying) "停止生成" else "发送",
+                        backgroundColor = PurpleStart,
+                        iconColor = Color.White,
+                        onClick = {
+                            if (isReplying) {
+                                onStopGenerating()
+                            } else {
+                                onSend()
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
 
             AnimatedVisibility(
@@ -1055,6 +1197,406 @@ private fun AgentInputBar(
                     onChooseImage = onChooseImage
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun VoiceHoldField(
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onTap: () -> Unit,
+    onVoiceStart: () -> Unit,
+    onVoiceFinish: (VoiceGestureTarget) -> Unit,
+    onVoiceCancel: () -> Unit,
+    onVoiceTargetChange: (VoiceGestureTarget) -> Unit
+) {
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFFFAF8FE))
+            .border(1.dp, Color(0xFFEDE5F7), RoundedCornerShape(16.dp))
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val releasedBeforeLongPress = withTimeoutOrNull(320) {
+                        waitForUpOrCancellation()
+                    }
+                    if (releasedBeforeLongPress != null) {
+                        onTap()
+                    } else {
+                        onVoiceStart()
+                        var currentTarget = VoiceGestureTarget.Normal
+                        onVoiceTargetChange(currentTarget)
+                        do {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull()
+                            if (change != null) {
+                                val dx = change.position.x - down.position.x
+                                val nextTarget = when {
+                                    dx < -48f -> VoiceGestureTarget.Cancel
+                                    dx > 48f -> VoiceGestureTarget.Edit
+                                    else -> VoiceGestureTarget.Normal
+                                }
+                                if (nextTarget != currentTarget) {
+                                    currentTarget = nextTarget
+                                    onVoiceTargetChange(currentTarget)
+                                }
+                            }
+                            change?.consume()
+                        } while (event.changes.any { it.pressed })
+                        when (currentTarget) {
+                            VoiceGestureTarget.Cancel -> onVoiceCancel()
+                            VoiceGestureTarget.Normal,
+                            VoiceGestureTarget.Edit -> onVoiceFinish(currentTarget)
+                        }
+                        onVoiceTargetChange(VoiceGestureTarget.Normal)
+                    }
+                }
+            }
+            .alpha(if (enabled) 1f else 0.62f),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = "发消息或长按说话",
+            color = TextHint,
+            fontSize = 15.sp,
+            modifier = Modifier.padding(horizontal = 14.dp)
+        )
+    }
+}
+
+@Composable
+private fun RecordingVoiceOverlay(
+    visible: Boolean,
+    target: VoiceGestureTarget,
+    isProcessing: Boolean = false,
+    transcript: String = ""
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut()
+    ) {
+        val isCancel = target == VoiceGestureTarget.Cancel
+        val isEdit = target == VoiceGestureTarget.Edit
+        val cancelFill by animateColorAsState(
+            targetValue = if (isCancel) Color(0xFFF8F6FA) else Color(0xA9706978),
+            label = "voiceCancelFill"
+        )
+        val editFill by animateColorAsState(
+            targetValue = if (isEdit) Color(0xFFF8F6FA) else Color(0xA9706978),
+            label = "voiceEditFill"
+        )
+        val cancelShadowAlpha by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = if (isCancel) 0.08f else 0.045f,
+            label = "voiceCancelShadowAlpha"
+        )
+        val editShadowAlpha by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = if (isEdit) 0.08f else 0.045f,
+            label = "voiceEditShadowAlpha"
+        )
+        val centerText = transcript.ifBlank {
+            when {
+                isProcessing && isEdit -> "正在转文字"
+                isProcessing -> "正在发送"
+                else -> ""
+            }
+        }
+        val helperText = when {
+            isProcessing && isEdit -> "识别完成后进入编辑"
+            isProcessing -> "识别完成后发送"
+            isCancel -> "松手 取消"
+            isEdit -> "松手 编辑"
+            else -> "松手 发送"
+        }
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xC2262529))
+        ) {
+            val overlayMaxWidth = maxWidth
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(y = (-18).dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .widthIn(
+                            min = 136.dp,
+                            max = overlayMaxWidth * 0.64f
+                        )
+                        .wrapContentWidth()
+                        .shadow(
+                            elevation = 8.dp,
+                            shape = RoundedCornerShape(24.dp),
+                            ambientColor = Color.Black.copy(alpha = 0.18f),
+                            spotColor = Color.Black.copy(alpha = 0.16f)
+                        )
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xFFF8F6FA))
+                        .border(1.dp, Color.White.copy(alpha = 0.58f), RoundedCornerShape(24.dp))
+                        .padding(horizontal = 26.dp, vertical = 22.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = centerText.ifBlank { "正在聆听" },
+                        color = TextPrimary,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.height(15.dp))
+                Text(
+                    text = helperText,
+                    color = Color(0xFFE8E2F0).copy(alpha = 0.92f),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            BoxWithConstraints(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height((maxHeight * 0.26f).coerceIn(260.dp, 320.dp))
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val arcCenterY = 172.dp.toPx()
+                    val arcSideY = 206.dp.toPx()
+                    val arcControlY = 190.dp.toPx()
+
+                    // One shared carrier curve controls both action surfaces. The
+                    // surface bottom edge follows this curve, while the top edge
+                    // uses the same controls with a constant vertical thickness.
+                    val guideOuterX = -0.18f
+                    val guideControl1X = -0.02f
+                    val guideControl2X = 0.14f
+                    val guideInnerX = 0.29f
+                    val guideOuterY = 184.dp.toPx()
+                    val guideControl1Y = 176.dp.toPx()
+                    val guideControl2Y = 158.dp.toPx()
+                    val guideCenterY = 150.dp.toPx()
+                    val surfaceThickness = 82.dp.toPx()
+                    val innerExtremeX = 0.43f
+                    val innerExtremeY = 109.dp.toPx()
+                    val innerCapEntryControlY = 64.dp.toPx()
+                    val innerCapUpperExtremeControlY = 83.dp.toPx()
+                    val innerCapLowerExtremeControlY = 135.dp.toPx()
+                    val innerCapExitControlY = 146.dp.toPx()
+
+                    fun buildActionSurface(mirror: Boolean): Path {
+                        fun mapX(fraction: Float): Float =
+                            if (mirror) (1f - fraction) * w else fraction * w
+
+                        return Path().apply {
+                            // Top edge: the same guide arc, offset by one fixed
+                            // thickness. Its curvature is shared by both sides.
+                            moveTo(
+                                mapX(guideOuterX),
+                                guideOuterY - surfaceThickness
+                            )
+                            cubicTo(
+                                mapX(guideControl1X),
+                                guideControl1Y - surfaceThickness,
+                                mapX(guideControl2X),
+                                guideControl2Y - surfaceThickness,
+                                mapX(guideInnerX),
+                                guideCenterY - surfaceThickness
+                            )
+
+                            // One shared inner cap. The two segments meet at a
+                            // single extreme and retain the same tangent there.
+                            cubicTo(
+                                mapX(0.37f),
+                                innerCapEntryControlY,
+                                mapX(innerExtremeX),
+                                innerCapUpperExtremeControlY,
+                                mapX(innerExtremeX),
+                                innerExtremeY
+                            )
+                            cubicTo(
+                                mapX(innerExtremeX),
+                                innerCapLowerExtremeControlY,
+                                mapX(0.37f),
+                                innerCapExitControlY,
+                                mapX(guideInnerX),
+                                guideCenterY
+                            )
+
+                            // Bottom edge: the same guide arc in reverse, so the
+                            // mirrored surface has exactly the same curvature.
+                            cubicTo(
+                                mapX(guideControl2X),
+                                guideControl2Y,
+                                mapX(guideControl1X),
+                                guideControl1Y,
+                                mapX(guideOuterX),
+                                guideOuterY
+                            )
+                            close()
+                        }
+                    }
+
+                    // Fixed target skeleton: this is the only bottom arc.
+                    val bottomArc = Path().apply {
+                        moveTo(0f, arcSideY)
+                        cubicTo(
+                            0.06f * w,
+                            arcControlY,
+                            0.35f * w,
+                            arcCenterY,
+                            0.50f * w,
+                            arcCenterY
+                        )
+                        cubicTo(
+                            0.65f * w,
+                            arcCenterY,
+                            0.94f * w,
+                            arcControlY,
+                            w,
+                            arcSideY
+                        )
+                        lineTo(w, h)
+                        lineTo(0f, h)
+                        close()
+                    }
+                    drawPath(bottomArc, Color(0xFF5A5560))
+
+                    val cancelSurface = buildActionSurface(mirror = false)
+                    val editSurface = buildActionSurface(mirror = true)
+
+                    // Draw the same fixed surfaces again with a subtle 2.dp shadow.
+                    translate(0f, 2.dp.toPx()) {
+                        drawPath(
+                            cancelSurface,
+                            Color.Black.copy(alpha = cancelShadowAlpha)
+                        )
+                        drawPath(
+                            editSurface,
+                            Color.Black.copy(alpha = editShadowAlpha)
+                        )
+                    }
+
+                    drawPath(cancelSurface, cancelFill)
+                    drawPath(editSurface, editFill)
+                }
+
+                Text(
+                    text = "取消",
+                    color = if (isCancel) Color(0xFF211E25) else Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = maxWidth * 0.24f - 20.dp,
+                            y = 97.dp
+                        )
+                )
+                Text(
+                    text = "编辑",
+                    color = if (isEdit) Color(0xFF211E25) else Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = maxWidth * 0.76f - 20.dp,
+                            y = 97.dp
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceTranscriptEditorOverlay(
+    transcript: String,
+    onTranscriptChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSend: (String) -> Unit
+) {
+    var editableTranscript by remember(transcript) { mutableStateOf(transcript) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xED241E2C))
+            .padding(horizontal = 16.dp, vertical = 28.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Text(
+            text = "×",
+            color = Color.White,
+            fontSize = 38.sp,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .clickable(onClick = onDismiss)
+                .padding(horizontal = 4.dp, vertical = 8.dp)
+        )
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(bottom = 18.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            BasicTextField(
+                value = editableTranscript,
+                onValueChange = {
+                    editableTranscript = it
+                    onTranscriptChange(it)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 74.dp, max = 148.dp)
+                    .focusRequester(focusRequester)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xFFF8F4FF))
+                    .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                textStyle = TextStyle(
+                    color = TextPrimary,
+                    fontSize = 24.sp,
+                    lineHeight = 32.sp
+                ),
+                cursorBrush = SolidColor(PurpleStart),
+                minLines = 1,
+                maxLines = 4
+            )
+            Spacer(modifier = Modifier.height(22.dp))
+            Text(
+                text = "发送",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(PurpleStart)
+                    .clickable { onSend(editableTranscript) }
+                    .padding(horizontal = 52.dp, vertical = 15.dp)
+            )
         }
     }
 }
