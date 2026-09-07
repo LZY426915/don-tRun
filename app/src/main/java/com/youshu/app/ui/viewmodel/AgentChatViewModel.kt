@@ -50,6 +50,9 @@ class AgentChatViewModel @Inject constructor(
     private val _isTranscribingVoice = MutableStateFlow(false)
     val isTranscribingVoice: StateFlow<Boolean> = _isTranscribingVoice.asStateFlow()
 
+    private val _pendingVoiceTranscript = MutableStateFlow<String?>(null)
+    val pendingVoiceTranscript: StateFlow<String?> = _pendingVoiceTranscript.asStateFlow()
+
     private val _historyVisible = MutableStateFlow(false)
     val historyVisible: StateFlow<Boolean> = _historyVisible.asStateFlow()
 
@@ -317,7 +320,10 @@ class AgentChatViewModel @Inject constructor(
     // UI 状态
     // ──────────────────────────────────────────
 
-    fun submitVoiceMessage(audioPath: String) {
+    fun submitVoiceMessage(
+        audioPath: String,
+        openEditorAfterTranscription: Boolean = false
+    ) {
         if (_isReplying.value || _isTranscribingVoice.value) return
 
         _isTranscribingVoice.value = true
@@ -327,12 +333,7 @@ class AgentChatViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = { transcript ->
-                    val cleaned = transcript.trim()
-                    if (cleaned.isBlank()) {
-                        appendAssistantErrorMessage("语音没有识别出文字，再说一次试试。")
-                    } else {
-                        submitTextMessage(cleaned)
-                    }
+                    submitRecognizedVoiceTranscript(transcript, openEditorAfterTranscription)
                 },
                 onFailure = { error ->
                     val rawMessage = error.message.orEmpty()
@@ -349,6 +350,34 @@ class AgentChatViewModel @Inject constructor(
                 }
             )
         }
+    }
+
+    /** 将已识别出的文字路由到自动发送或编辑框。 */
+    fun submitRecognizedVoiceTranscript(
+        transcript: String,
+        openEditorAfterTranscription: Boolean = false
+    ) {
+        val cleaned = transcript.trim()
+        if (cleaned.isBlank()) {
+            viewModelScope.launch {
+                appendAssistantErrorMessage("语音没有识别出文字，再说一次试试。")
+            }
+        } else if (openEditorAfterTranscription) {
+            _pendingVoiceTranscript.value = cleaned
+        } else {
+            submitTextMessage(cleaned)
+        }
+    }
+
+    fun confirmVoiceTranscript(transcript: String) {
+        val cleaned = transcript.trim()
+        if (cleaned.isBlank()) return
+        _pendingVoiceTranscript.value = null
+        submitTextMessage(cleaned)
+    }
+
+    fun discardVoiceTranscript() {
+        _pendingVoiceTranscript.value = null
     }
 
     fun setHistoryVisible(visible: Boolean) {

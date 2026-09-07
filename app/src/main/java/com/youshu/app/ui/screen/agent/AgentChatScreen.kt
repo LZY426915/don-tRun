@@ -12,6 +12,7 @@ import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -27,6 +28,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -101,13 +103,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -157,7 +164,8 @@ private val recommendedQuestions = listOf(
 
 private enum class VoiceGestureTarget {
     Normal,
-    Cancel
+    Cancel,
+    Edit
 }
 
 @Composable
@@ -172,6 +180,7 @@ fun AgentChatScreen(
     val activeConversation by viewModel.activeConversation.collectAsState()
     val isReplying by viewModel.isReplying.collectAsState()
     val isTranscribingVoice by viewModel.isTranscribingVoice.collectAsState()
+    val pendingVoiceTranscript by viewModel.pendingVoiceTranscript.collectAsState()
     val historyVisible by viewModel.historyVisible.collectAsState()
     val searchKeyword by viewModel.searchKeyword.collectAsState()
 
@@ -184,6 +193,7 @@ fun AgentChatScreen(
     var cameraOutputUri by remember { mutableStateOf<Uri?>(null) }
     var isRecordingVoice by remember { mutableStateOf(false) }
     var voiceGestureTarget by remember { mutableStateOf(VoiceGestureTarget.Normal) }
+    var voiceProcessingTarget by remember { mutableStateOf(VoiceGestureTarget.Normal) }
     var voiceRecordingStartAt by remember { mutableStateOf(0L) }
     val voiceRecorder = remember(context) { WavAudioRecorder(context.applicationContext) }
     val listState = rememberLazyListState()
@@ -272,6 +282,7 @@ fun AgentChatScreen(
     fun stopVoiceRecording(target: VoiceGestureTarget = VoiceGestureTarget.Normal) {
         val file = voiceRecorder.stop()
         isRecordingVoice = false
+        voiceProcessingTarget = target
         voiceGestureTarget = VoiceGestureTarget.Normal
         val elapsed = System.currentTimeMillis() - voiceRecordingStartAt
 
@@ -290,7 +301,10 @@ fun AgentChatScreen(
             Toast.makeText(context, "录音太短，再说一次试试", Toast.LENGTH_SHORT).show()
             return
         }
-        viewModel.submitVoiceMessage(audioPath = file.absolutePath)
+        viewModel.submitVoiceMessage(
+            audioPath = file.absolutePath,
+            openEditorAfterTranscription = target == VoiceGestureTarget.Edit
+        )
     }
 
     fun cancelVoiceRecording() {
@@ -551,9 +565,17 @@ fun AgentChatScreen(
 
         RecordingVoiceOverlay(
             visible = isRecordingVoice || isTranscribingVoice,
-            target = if (isRecordingVoice) voiceGestureTarget else VoiceGestureTarget.Normal,
+            target = if (isRecordingVoice) voiceGestureTarget else voiceProcessingTarget,
             isProcessing = isTranscribingVoice && !isRecordingVoice
         )
+
+        pendingVoiceTranscript?.let { transcript ->
+            VoiceTranscriptEditorOverlay(
+                transcript = transcript,
+                onDismiss = viewModel::discardVoiceTranscript,
+                onSend = viewModel::confirmVoiceTranscript
+            )
+        }
 
         // 历史对话侧边栏遮罩
         AnimatedVisibility(
@@ -1181,10 +1203,10 @@ private fun VoiceHoldField(
                             val change = event.changes.firstOrNull()
                             if (change != null) {
                                 val dx = change.position.x - down.position.x
-                                val nextTarget = if (dx < -48f) {
-                                    VoiceGestureTarget.Cancel
-                                } else {
-                                    VoiceGestureTarget.Normal
+                                val nextTarget = when {
+                                    dx < -48f -> VoiceGestureTarget.Cancel
+                                    dx > 48f -> VoiceGestureTarget.Edit
+                                    else -> VoiceGestureTarget.Normal
                                 }
                                 if (nextTarget != currentTarget) {
                                     currentTarget = nextTarget
@@ -1195,7 +1217,8 @@ private fun VoiceHoldField(
                         } while (event.changes.any { it.pressed })
                         when (currentTarget) {
                             VoiceGestureTarget.Cancel -> onVoiceCancel()
-                            VoiceGestureTarget.Normal -> onVoiceFinish(currentTarget)
+                            VoiceGestureTarget.Normal,
+                            VoiceGestureTarget.Edit -> onVoiceFinish(currentTarget)
                         }
                         onVoiceTargetChange(VoiceGestureTarget.Normal)
                     }
@@ -1226,18 +1249,42 @@ private fun RecordingVoiceOverlay(
         exit = fadeOut()
     ) {
         val isCancel = target == VoiceGestureTarget.Cancel
-        val centerText = if (isProcessing) "正在发送" else "正在聆听"
+        val isEdit = target == VoiceGestureTarget.Edit
+        val cancelFill by animateColorAsState(
+            targetValue = if (isCancel) Color(0xFFF8F6FA) else Color(0xA9706978),
+            label = "voiceCancelFill"
+        )
+        val editFill by animateColorAsState(
+            targetValue = if (isEdit) Color(0xFFF8F6FA) else Color(0xA9706978),
+            label = "voiceEditFill"
+        )
+        val cancelShadowAlpha by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = if (isCancel) 0.08f else 0.045f,
+            label = "voiceCancelShadowAlpha"
+        )
+        val editShadowAlpha by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = if (isEdit) 0.08f else 0.045f,
+            label = "voiceEditShadowAlpha"
+        )
+        val centerText = when {
+            isProcessing && isEdit -> "正在转文字"
+            isProcessing -> "正在发送"
+            else -> ""
+        }
         val helperText = when {
+            isProcessing && isEdit -> "识别完成后进入编辑"
             isProcessing -> "识别完成后发送"
             isCancel -> "松手 取消"
+            isEdit -> "松手 编辑"
             else -> "松手 发送"
         }
 
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xC2262529))
         ) {
+            val overlayMaxWidth = maxWidth
             Column(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -1246,7 +1293,7 @@ private fun RecordingVoiceOverlay(
             ) {
                 Box(
                     modifier = Modifier
-                        .widthIn(min = 136.dp * scale, max = 280.dp * scale)
+                        .widthIn(min = 136.dp * scale, max = overlayMaxWidth * 0.64f)
                         .wrapContentWidth()
                         .shadow(
                             elevation = 8.dp,
@@ -1261,7 +1308,7 @@ private fun RecordingVoiceOverlay(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = centerText,
+                        text = centerText.ifBlank { "正在聆听" },
                         color = TextPrimary,
                         fontSize = (20f * scale).sp,
                         fontWeight = FontWeight.Medium,
@@ -1276,6 +1323,250 @@ private fun RecordingVoiceOverlay(
                     fontSize = (15f * scale).sp,
                     fontWeight = FontWeight.Medium
                 )
+            }
+
+            BoxWithConstraints(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height((maxHeight * 0.26f).coerceIn(260.dp, 320.dp))
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val arcCenterY = 172.dp.toPx()
+                    val arcSideY = 206.dp.toPx()
+                    val arcControlY = 190.dp.toPx()
+
+                    val guideOuterX = -0.18f
+                    val guideControl1X = -0.02f
+                    val guideControl2X = 0.14f
+                    val guideInnerX = 0.29f
+                    val guideOuterY = 184.dp.toPx()
+                    val guideControl1Y = 176.dp.toPx()
+                    val guideControl2Y = 158.dp.toPx()
+                    val guideCenterY = 150.dp.toPx()
+                    val surfaceThickness = 82.dp.toPx()
+                    val innerExtremeX = 0.43f
+                    val innerExtremeY = 109.dp.toPx()
+                    val innerCapEntryControlY = 64.dp.toPx()
+                    val innerCapUpperExtremeControlY = 83.dp.toPx()
+                    val innerCapLowerExtremeControlY = 135.dp.toPx()
+                    val innerCapExitControlY = 146.dp.toPx()
+
+                    fun buildActionSurface(mirror: Boolean): Path {
+                        fun mapX(fraction: Float): Float =
+                            if (mirror) (1f - fraction) * w else fraction * w
+
+                        return Path().apply {
+                            moveTo(
+                                mapX(guideOuterX),
+                                guideOuterY - surfaceThickness
+                            )
+                            cubicTo(
+                                mapX(guideControl1X),
+                                guideControl1Y - surfaceThickness,
+                                mapX(guideControl2X),
+                                guideControl2Y - surfaceThickness,
+                                mapX(guideInnerX),
+                                guideCenterY - surfaceThickness
+                            )
+                            cubicTo(
+                                mapX(0.37f),
+                                innerCapEntryControlY,
+                                mapX(innerExtremeX),
+                                innerCapUpperExtremeControlY,
+                                mapX(innerExtremeX),
+                                innerExtremeY
+                            )
+                            cubicTo(
+                                mapX(innerExtremeX),
+                                innerCapLowerExtremeControlY,
+                                mapX(0.37f),
+                                innerCapExitControlY,
+                                mapX(guideInnerX),
+                                guideCenterY
+                            )
+                            cubicTo(
+                                mapX(guideControl2X),
+                                guideControl2Y,
+                                mapX(guideControl1X),
+                                guideControl1Y,
+                                mapX(guideOuterX),
+                                guideOuterY
+                            )
+                            close()
+                        }
+                    }
+
+                    val bottomArc = Path().apply {
+                        moveTo(0f, arcSideY)
+                        cubicTo(
+                            0.06f * w,
+                            arcControlY,
+                            0.35f * w,
+                            arcCenterY,
+                            0.50f * w,
+                            arcCenterY
+                        )
+                        cubicTo(
+                            0.65f * w,
+                            arcCenterY,
+                            0.94f * w,
+                            arcControlY,
+                            w,
+                            arcSideY
+                        )
+                        lineTo(w, h)
+                        lineTo(0f, h)
+                        close()
+                    }
+                    drawPath(bottomArc, Color(0xFF5A5560))
+
+                    val cancelSurface = buildActionSurface(mirror = false)
+                    val editSurface = buildActionSurface(mirror = true)
+
+                    translate(0f, 2.dp.toPx()) {
+                        drawPath(
+                            cancelSurface,
+                            Color.Black.copy(alpha = cancelShadowAlpha)
+                        )
+                        drawPath(
+                            editSurface,
+                            Color.Black.copy(alpha = editShadowAlpha)
+                        )
+                    }
+
+                    drawPath(cancelSurface, cancelFill)
+                    drawPath(editSurface, editFill)
+                }
+
+                Text(
+                    text = "取消",
+                    color = if (isCancel) Color(0xFF211E25) else Color.White,
+                    fontSize = (18f * scale).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = maxWidth * 0.24f - 20.dp,
+                            y = 97.dp
+                        )
+                )
+                Text(
+                    text = "编辑",
+                    color = if (isEdit) Color(0xFF211E25) else Color.White,
+                    fontSize = (18f * scale).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = maxWidth * 0.76f - 20.dp,
+                            y = 97.dp
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceTranscriptEditorOverlay(
+    transcript: String,
+    onDismiss: () -> Unit,
+    onSend: (String) -> Unit
+) {
+    var editableTranscript by remember(transcript) { mutableStateOf(transcript) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xED241E2C))
+            .padding(horizontal = 16.dp, vertical = 28.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Text(
+            text = "×",
+            color = Color.White,
+            fontSize = 38.sp,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .clickable(onClick = onDismiss)
+                .padding(horizontal = 4.dp, vertical = 8.dp)
+        )
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(bottom = 18.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            BasicTextField(
+                value = editableTranscript,
+                onValueChange = { editableTranscript = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 74.dp, max = 148.dp)
+                    .focusRequester(focusRequester)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xFFF8F4FF))
+                    .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                textStyle = TextStyle(
+                    color = TextPrimary,
+                    fontSize = 20.sp,
+                    lineHeight = 28.sp
+                ),
+                cursorBrush = SolidColor(PurpleStart),
+                minLines = 1,
+                maxLines = 4
+            )
+            Spacer(modifier = Modifier.height(22.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .clickable(onClick = onDismiss)
+                        .padding(vertical = 15.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "删除",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(PurpleStart)
+                        .clickable { onSend(editableTranscript) }
+                        .padding(vertical = 15.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "发送",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }
