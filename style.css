@@ -693,6 +693,14 @@ a {
   min-width: 210px;
 }
 
+.build-meta {
+  margin: 20px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
 .footer {
   padding: 28px 0 34px;
   color: rgba(255, 255, 255, 0.78);
