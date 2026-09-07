@@ -12,8 +12,6 @@ import com.youshu.app.data.agent.ChatMessage
 import com.youshu.app.data.agent.ChatMessageStatus
 import com.youshu.app.data.ai.AiInferenceRepository
 import com.youshu.app.data.network.BackendApiException
-import com.youshu.app.data.network.BackendApiClient
-import com.youshu.app.data.network.QwenRealtimeToken
 import com.youshu.app.util.ImageUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -34,7 +32,6 @@ import javax.inject.Inject
 class AgentChatViewModel @Inject constructor(
     private val agentClient: AgentClient,
     private val aiInferenceRepository: AiInferenceRepository,
-    private val backendApiClient: BackendApiClient,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -52,9 +49,6 @@ class AgentChatViewModel @Inject constructor(
 
     private val _isTranscribingVoice = MutableStateFlow(false)
     val isTranscribingVoice: StateFlow<Boolean> = _isTranscribingVoice.asStateFlow()
-
-    private val _pendingVoiceTranscript = MutableStateFlow<String?>(null)
-    val pendingVoiceTranscript: StateFlow<String?> = _pendingVoiceTranscript.asStateFlow()
 
     private val _historyVisible = MutableStateFlow(false)
     val historyVisible: StateFlow<Boolean> = _historyVisible.asStateFlow()
@@ -323,10 +317,7 @@ class AgentChatViewModel @Inject constructor(
     // UI 状态
     // ──────────────────────────────────────────
 
-    fun submitVoiceMessage(
-        audioPath: String,
-        openEditorAfterTranscription: Boolean = false
-    ) {
+    fun submitVoiceMessage(audioPath: String) {
         if (_isReplying.value || _isTranscribingVoice.value) return
 
         _isTranscribingVoice.value = true
@@ -336,7 +327,12 @@ class AgentChatViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = { transcript ->
-                    submitRecognizedVoiceTranscript(transcript, openEditorAfterTranscription)
+                    val cleaned = transcript.trim()
+                    if (cleaned.isBlank()) {
+                        appendAssistantErrorMessage("语音没有识别出文字，再说一次试试。")
+                    } else {
+                        submitTextMessage(cleaned)
+                    }
                 },
                 onFailure = { error ->
                     val rawMessage = error.message.orEmpty()
@@ -353,20 +349,6 @@ class AgentChatViewModel @Inject constructor(
                 }
             )
         }
-    }
-
-    suspend fun requestQwenRealtimeToken(): QwenRealtimeToken =
-        backendApiClient.requestQwenRealtimeToken()
-
-    fun confirmVoiceTranscript(transcript: String) {
-        val cleaned = transcript.trim()
-        if (cleaned.isBlank()) return
-        _pendingVoiceTranscript.value = null
-        submitTextMessage(cleaned)
-    }
-
-    fun discardVoiceTranscript() {
-        _pendingVoiceTranscript.value = null
     }
 
     fun setHistoryVisible(visible: Boolean) {
@@ -416,23 +398,6 @@ class AgentChatViewModel @Inject constructor(
             } else {
                 "这次回答没能完成，请稍后重试。"
             }
-        }
-    }
-
-    /** Routes a transcript that is already available from the live recognizer. */
-    fun submitRecognizedVoiceTranscript(
-        transcript: String,
-        openEditorAfterTranscription: Boolean = false
-    ) {
-        val cleaned = transcript.trim()
-        if (cleaned.isBlank()) {
-            viewModelScope.launch {
-                appendAssistantErrorMessage("语音没有识别出文字，再说一次试试。")
-            }
-        } else if (openEditorAfterTranscription) {
-            _pendingVoiceTranscript.value = cleaned
-        } else {
-            submitTextMessage(cleaned)
         }
     }
 

@@ -20,6 +20,10 @@ class AgentIntentRouterTest {
         assertEquals(AgentRoute.TOOL_AUTO, router.route("矿泉水在哪儿？"))
         assertEquals(AgentRoute.TOOL_AUTO, router.route("家里有哪些东西快过期？"))
         assertEquals(AgentRoute.TOOL_AUTO, router.route("卧室里都放了什么东西？"))
+        assertEquals(AgentRoute.TOOL_AUTO, router.route("冰箱上有东西吗？"))
+        assertEquals(AgentRoute.TOOL_AUTO, router.route("床头柜里有什么？"))
+        assertEquals(AgentRoute.TOOL_AUTO, router.route("书桌上放东西了吗？"))
+        assertEquals(AgentRoute.TOOL_AUTO, router.route("冰箱里有没有东西？"))
     }
 
     @Test

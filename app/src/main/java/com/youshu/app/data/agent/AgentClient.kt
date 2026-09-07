@@ -600,8 +600,8 @@ class AgentClient @Inject constructor(
             "确认", "确定", "同意", "删吧", "都删了", "继续删", "可以删"
         ).any { text.contains(it) }
         val hasQueryWord = listOf(
-            "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么",
-            "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
+            "查", "查看", "看看", "找", "在哪", "哪里", "有没有", "哪些", "什么", "有啥",
+            "有东西", "有物品", "清单", "列表", "库存", "过期", "天气", "穿", "带伞", "防晒", "冷热"
         ).any { text.contains(it) }
         val isLocationMove = AgentIntentPatterns.isItemLocationMove(text)
         if (!hasMutationWord && !hasQueryWord && !isLocationMove) return null
@@ -689,11 +689,11 @@ class AgentClient @Inject constructor(
                 requiresToolCall = true
                 "get_used_up_items。"
             }
-            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存").any { text.contains(it) } &&
+            listOf("在哪", "哪里", "有没有", "有什么", "哪些", "找", "查", "查看", "库存", "有东西", "有物品", "有啥").any { text.contains(it) } &&
                 !isUserLocationMetaQuestion(text) -> {
                 allowedToolNames = setOf("search_items", "find_related_items", "get_items_by_location")
                 requiresToolCall = false
-                "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么时调用 get_items_by_location。"
+                "search_items 或 find_related_items。用户说的是泛称/同义词/品类词时优先 find_related_items；用户问某个位置下有什么、有没有东西时调用 get_items_by_location。"
             }
             else -> return null
         }
@@ -789,7 +789,7 @@ class AgentClient @Inject constructor(
                 "get_items_by_location" -> {
                     val location = args["location"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     val items = inventoryTool.getItemsByLocationSnapshot(location)
-                    formatLocationResults(items, location)
+                    formatLocationResults(items, location, inventoryTool.locationExists(location))
                 }
                 "get_expiring_items" -> {
                     val days = args["days"]?.jsonPrimitive?.intOrNull ?: 7
@@ -1027,9 +1027,17 @@ class AgentClient @Inject constructor(
         return null
     }
 
-    private fun formatLocationResults(items: List<ItemDetail>, location: String): String {
+    private fun formatLocationResults(
+        items: List<ItemDetail>,
+        location: String,
+        locationExists: Boolean
+    ): String {
         if (items.isEmpty()) {
-            return "在\"$location\"没有找到任何物品。"
+            return if (locationExists) {
+                "在\"$location\"没有找到任何物品。"
+            } else {
+                "目前还没有\"$location\"这个地点，需要帮您添加吗？"
+            }
         }
         return buildString {
             appendLine("在\"$location\"找到 ${items.size} 件物品：")
@@ -1384,6 +1392,7 @@ class AgentClient @Inject constructor(
 - 永远基于工具返回的数据说话，不要编造。
 - 同一轮对话里，工具返回结果是最高优先级；如果工具说“已添加/已删除/已保存”，就按这个结果回复，不要再根据位置树或历史消息改口说“原本已经存在”。
 - 如果工具返回空结果，如实告诉用户没找到，可以建议用户先录入物品。
+- 当用户询问某个地点/位置里有什么、东西在哪时，调用 get_items_by_location。如果 get_items_by_location 返回“目前还没有……这个地点，需要帮您添加吗？”，就把这句话原样转达给用户并询问是否需要添加；不要编造该地点存在，也不要用“稍等/我帮你看看”敷衍了事却没有下文。
 - search_items 可以搜索名称、分类、位置、备注。
 - 当用户用的是泛称、别名、品牌和品类可能不一致的说法时，例如“矿泉水”对应“农夫山泉/怡宝”，“纸巾”对应“抽纸/卷纸”，“充电器”对应“充电头/数据线”，优先调用 find_related_items 做语义候选筛选；如果 search_items 返回空结果，也必须再调用 find_related_items 后才能说没找到。
 - find_related_items 返回的是候选池，不是最终结果。你要按用户问题的意思从候选池中挑出真正相关的物品，列出名称、完整位置、分类、数量、状态、备注/过期等关键信息；如果多件都相关，全部列出并请用户选择。
@@ -1468,7 +1477,7 @@ class AgentClient @Inject constructor(
                     put("type", "function")
                     putJsonObject("function") {
                         put("name", "get_items_by_location")
-                        put("description", "查询某个位置下的所有物品。支持子位置递归，如\"卧室\"会包含床头柜、衣柜等子位置。")
+                        put("description", "查询某个位置下的所有物品。支持子位置递归，如\"卧室\"会包含床头柜、衣柜等子位置。如果该位置不存在，工具会返回“目前还没有这个地点，需要帮您添加吗”的提示，此时应把该提示转达给用户并询问是否添加。")
                         putJsonObject("parameters") {
                             put("type", "object")
                             putJsonObject("properties") {

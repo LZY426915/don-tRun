@@ -18,7 +18,6 @@ class WavAudioRecorder(
     private var outputFile: File? = null
     private var recorderThread: Thread? = null
     private var finishLatch: CountDownLatch? = null
-    private var onPcmChunk: ((ByteArray) -> Unit)? = null
     private val recording = AtomicBoolean(false)
     @Volatile private var recordedBytes: Long = 0L
 
@@ -26,7 +25,7 @@ class WavAudioRecorder(
         get() = recording.get()
 
     @SuppressLint("MissingPermission")
-    fun start(onPcmChunk: ((ByteArray) -> Unit)? = null): File {
+    fun start(): File {
         check(!recording.get()) { "正在录音" }
 
         val bufferSize = maxOf(
@@ -63,7 +62,6 @@ class WavAudioRecorder(
         audioRecord = record
         outputFile = file
         finishLatch = latch
-        this.onPcmChunk = onPcmChunk
         recording.set(true)
 
         RandomAccessFile(file, "rw").use { raf ->
@@ -81,9 +79,6 @@ class WavAudioRecorder(
                         if (read > 0) {
                             raf.write(buffer, 0, read)
                             recordedBytes += read.toLong()
-                            this@WavAudioRecorder.onPcmChunk?.let { callback ->
-                                runCatching { callback(buffer.copyOf(read)) }
-                            }
                         }
                     }
                 }
@@ -109,7 +104,6 @@ class WavAudioRecorder(
         outputFile = null
         recorderThread = null
         finishLatch = null
-        onPcmChunk = null
 
         if (file != null && file.exists()) {
             RandomAccessFile(file, "rw").use { raf ->

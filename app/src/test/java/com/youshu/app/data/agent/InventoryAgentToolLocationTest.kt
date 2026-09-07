@@ -299,6 +299,47 @@ class InventoryAgentToolLocationTest {
         assertTrue(result.contains("我的家 / 书房 / 书柜"))
     }
 
+    @Test
+    fun locationExists_distinguishesExistingLocationsFromMissingOnes() = runTest {
+        val locations = listOf(
+            Location(id = 1, name = "我的家"),
+            Location(id = 2, name = "厨房", parentId = 1),
+            Location(id = 3, name = "冰箱", parentId = 2)
+        )
+        val tool = InventoryAgentTool(
+            proxy<ItemDao> { method, _ -> error("Unexpected ItemDao call: $method") },
+            proxy<CategoryDao> { method, _ -> error("Unexpected CategoryDao call: $method") },
+            proxy<LocationDao> { method, _ ->
+                when (method) {
+                    "getAllLocationsSnapshot" -> locations
+                    else -> error("Unexpected LocationDao call: $method")
+                }
+            }
+        )
+
+        assertTrue(tool.locationExists("冰箱"))
+        assertTrue(tool.locationExists("我的家 / 厨房 / 冰箱"))
+        assertTrue(tool.locationExists("家 / 厨房 / 冰箱"))
+        assertTrue(!tool.locationExists("车库"))
+        assertTrue(!tool.locationExists(""))
+    }
+
+    @Test
+    fun locationExists_returnsFalseWhenNoLocationsAreStored() = runTest {
+        val tool = InventoryAgentTool(
+            proxy<ItemDao> { method, _ -> error("Unexpected ItemDao call: $method") },
+            proxy<CategoryDao> { method, _ -> error("Unexpected CategoryDao call: $method") },
+            proxy<LocationDao> { method, _ ->
+                when (method) {
+                    "getAllLocationsSnapshot" -> emptyList<Location>()
+                    else -> error("Unexpected LocationDao call: $method")
+                }
+            }
+        )
+
+        assertTrue(!tool.locationExists("卧室"))
+    }
+
     private fun pathFor(locationId: Long?, locations: List<Location>): String? {
         var current = locations.firstOrNull { it.id == locationId } ?: return null
         val names = mutableListOf(current.name)

@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.youshu.app.ui.theme.PurpleStart
+import com.youshu.app.ui.theme.rememberResponsiveScale
 import com.youshu.app.util.CropRectFraction
 import com.youshu.app.util.ImageUtil
 import kotlin.math.abs
@@ -61,6 +62,7 @@ fun PhotoEditOverlay(
     onApply: (rotationDegrees: Int, cropRect: CropRectFraction) -> Unit
 ) {
     val context = LocalContext.current
+    val scale = rememberResponsiveScale()
     var rotationDegrees by remember(uri) { mutableStateOf(0) }
     var cropRect by remember(uri) {
         mutableStateOf(CropRectFraction(0.06f, 0.06f, 0.94f, 0.94f))
@@ -103,7 +105,7 @@ fun PhotoEditOverlay(
                 Text(
                     text = "调整照片",
                     color = Color.White,
-                    fontSize = 18.sp,
+                    fontSize = (17f * scale).sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.weight(1f))
@@ -194,13 +196,13 @@ fun PhotoEditOverlay(
                     .clip(RoundedCornerShape(999.dp))
                     .background(PurpleStart)
                     .clickable { onApply(rotationDegrees, cropRect.normalized()) }
-                    .padding(vertical = 13.dp),
+                    .padding(vertical = 13.dp * scale),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "应用",
                     color = Color.White,
-                    fontSize = 15.sp,
+                    fontSize = (14f * scale).sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -315,18 +317,19 @@ private fun PhotoEditButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val scale = rememberResponsiveScale()
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(999.dp))
             .background(Color.White.copy(alpha = 0.12f))
             .clickable(onClick = onClick)
-            .padding(vertical = 11.dp),
+            .padding(vertical = 11.dp * scale),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = Color.White,
-            fontSize = 13.sp,
+            fontSize = (13f * scale).sp,
             fontWeight = FontWeight.Bold
         )
     }

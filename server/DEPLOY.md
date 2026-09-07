@@ -47,11 +47,6 @@ ALLOWED_APP_VERSIONS=1.2.0
 
 不要把环境变量值发到聊天、截图、GitHub、Gradle 或 APK 中。已经公开过的旧 Key 必须在对应平台删除并重新创建。
 
-实时语音输入还需要部署当前 `server/src` 里的 `POST /v1/qwen/asr-token` 路由。
-它使用服务端的 `QWEN_API_KEY` 向百炼申请约 180 秒的临时凭据，APK 再用该临时凭据直连
-`qwen3-asr-flash-realtime` WebSocket；永久 Key 不会返回给客户端。部署后可用已授权的
-`/v1/session` token 请求该路由确认不再返回 404。
-
 ## 4. 验证
 
 部署完成后访问函数公网 URL 的 `/health`，应返回：

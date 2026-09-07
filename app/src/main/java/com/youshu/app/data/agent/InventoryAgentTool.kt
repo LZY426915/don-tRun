@@ -144,6 +144,25 @@ class InventoryAgentTool @Inject constructor(
         return itemDao.getItemsByLocationName(locationName.trim()).firstOrNull().orEmpty()
     }
 
+    /**
+     * 判断某个位置（名称或完整路径）是否真实存在于位置树中。
+     * 用于区分"位置不存在"和"位置存在但暂时没有物品"两种情况：
+     * 前者应提示用户是否需要添加，后者应如实说没有物品。
+     */
+    suspend fun locationExists(nameOrPath: String): Boolean {
+        val normalized = normalizeLocationPath(nameOrPath)
+        if (normalized.isBlank()) return false
+        val locations = locationDao.getAllLocationsSnapshot()
+        if (locations.isEmpty()) return false
+        val pathVariants = locationPathVariants(normalized)
+        val nameVariants = locationNameVariants(normalized)
+        return locations.any { location ->
+            pathVariants.any { variant ->
+                normalizeLocationPath(locationPath(location, locations)).equals(variant, ignoreCase = true)
+            } || nameVariants.any { variant -> location.name.equals(variant, ignoreCase = true) }
+        }
+    }
+
     // ──────────────────────────────────────────
     // 3. 按分类查询
     // ──────────────────────────────────────────

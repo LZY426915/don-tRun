@@ -100,31 +100,6 @@ class BackendApiClient internal constructor(
             }
     }
 
-    suspend fun requestQwenRealtimeToken(): QwenRealtimeToken {
-        val root = postJsonObject(
-            path = QWEN_REALTIME_TOKEN_PATH,
-            body = buildJsonObject { },
-            purpose = "speech"
-        )
-        val token = root["token"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val expiresAt = root["expiresAt"]?.jsonPrimitive?.longOrNull ?: 0L
-        val model = root["model"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val websocketUrl = root["websocketUrl"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        if (token.isBlank() || expiresAt <= 0L || model.isBlank() || websocketUrl.isBlank()) {
-            throw BackendApiException(
-                code = "INVALID_RESPONSE",
-                safeMessage = "实时语音服务返回的数据格式异常，请稍后重试。",
-                retryable = true
-            )
-        }
-        return QwenRealtimeToken(
-            token = token,
-            expiresAtEpochSeconds = expiresAt,
-            model = model,
-            websocketUrl = websocketUrl
-        )
-    }
-
     fun postSse(
         path: String,
         body: String
@@ -379,7 +354,6 @@ class BackendApiClient internal constructor(
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         const val SESSION_PATH = "/v1/session"
-        const val QWEN_REALTIME_TOKEN_PATH = "/v1/qwen/asr-token"
         const val SESSION_EXPIRY_MARGIN_MS = 30_000L
         const val EPOCH_MILLIS_THRESHOLD = 1_000_000_000_000L
 
@@ -395,13 +369,6 @@ class BackendApiClient internal constructor(
 internal data class BackendSession(
     val token: String,
     val expiresAtMillis: Long
-)
-
-data class QwenRealtimeToken(
-    val token: String,
-    val expiresAtEpochSeconds: Long,
-    val model: String,
-    val websocketUrl: String
 )
 
 internal interface BackendSessionStore {
