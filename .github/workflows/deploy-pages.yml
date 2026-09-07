@@ -1,0 +1,68 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Checkout gh-pages site
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Publish APK and version stamp to gh-pages
+        env:
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHA="${SHORT_SHA:0:7}"
+          DATE="$(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          cp app/build/outputs/apk/debug/app-debug.apk site/downloads/dongxi-bupao.apk
+
+          sed -i -E "s|(<span id=\"build-commit\">)[^<]*(</span>)|\1${SHA}\2|" site/index.html
+          sed -i -E "s|(<span id=\"build-date\">)[^<]*(</span>)|\1${DATE}\2|" site/index.html
+
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f downloads/dongxi-bupao.apk index.html
+          if git diff --cached --quiet; then
+            echo "No changes to publish."
+          else
+            git commit -m "deploy: build from main@${SHA}"
+            git push origin gh-pages
+          fi
