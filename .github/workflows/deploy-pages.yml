@@ -64,5 +64,5 @@ jobs:
             echo "No changes to publish."
           else
             git commit -m "deploy: build from main@${SHA}"
-            git push origin gh-pages
+            git push origin HEAD:gh-pages
           fi
