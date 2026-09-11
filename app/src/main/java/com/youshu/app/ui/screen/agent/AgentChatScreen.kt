@@ -12,7 +12,6 @@ import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -32,10 +31,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -110,7 +106,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -152,7 +147,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.withTimeoutOrNull
 
 private val recommendedQuestions = listOf(
     "冰箱里有什么快过期？",
@@ -175,6 +169,7 @@ fun AgentChatScreen(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val conversations by viewModel.conversations.collectAsState()
     val activeConversation by viewModel.activeConversation.collectAsState()
@@ -192,7 +187,6 @@ fun AgentChatScreen(
     var pendingWeatherQuestionAfterLocationPermission by remember { mutableStateOf<String?>(null) }
     var cameraOutputUri by remember { mutableStateOf<Uri?>(null) }
     var isRecordingVoice by remember { mutableStateOf(false) }
-    var voiceGestureTarget by remember { mutableStateOf(VoiceGestureTarget.Normal) }
     var voiceProcessingTarget by remember { mutableStateOf(VoiceGestureTarget.Normal) }
     var voiceRecordingStartAt by remember { mutableStateOf(0L) }
     val voiceRecorder = remember(context) { WavAudioRecorder(context.applicationContext) }
@@ -267,9 +261,9 @@ fun AgentChatScreen(
             Toast.makeText(context, "小东西正在处理上一条消息", Toast.LENGTH_SHORT).show()
             return
         }
+        keyboardController?.hide()
         voiceRecordingStartAt = System.currentTimeMillis()
         isRecordingVoice = true
-        voiceGestureTarget = VoiceGestureTarget.Normal
         attachmentsExpanded = false
 
         val file = runCatching { voiceRecorder.start() }.getOrNull()
@@ -283,7 +277,6 @@ fun AgentChatScreen(
         val file = voiceRecorder.stop()
         isRecordingVoice = false
         voiceProcessingTarget = target
-        voiceGestureTarget = VoiceGestureTarget.Normal
         val elapsed = System.currentTimeMillis() - voiceRecordingStartAt
 
         if (target == VoiceGestureTarget.Cancel) {
@@ -310,7 +303,6 @@ fun AgentChatScreen(
     fun cancelVoiceRecording() {
         voiceRecorder.cancel()
         isRecordingVoice = false
-        voiceGestureTarget = VoiceGestureTarget.Normal
         Toast.makeText(context, "已取消本次语音", Toast.LENGTH_SHORT).show()
     }
 
@@ -531,7 +523,6 @@ fun AgentChatScreen(
                 onValueChange = { input = it },
                 pendingImageUri = pendingAttachmentUri,
                 onRemovePendingImage = { pendingAttachmentUri = null },
-                isRecordingVoice = isRecordingVoice,
                 isReplying = isReplying,
                 attachmentsExpanded = attachmentsExpanded,
                 onToggleAttachments = { attachmentsExpanded = !attachmentsExpanded },
@@ -541,17 +532,6 @@ fun AgentChatScreen(
                     attachmentsExpanded = false
                     requestVoiceRecordingStart()
                 },
-                onVoiceFinish = {
-                    if (isRecordingVoice) {
-                        stopVoiceRecording(it)
-                    }
-                },
-                onVoiceCancel = {
-                    if (isRecordingVoice) {
-                        cancelVoiceRecording()
-                    }
-                },
-                onVoiceGestureTargetChange = { voiceGestureTarget = it },
                 onTakePhoto = {
                     attachmentsExpanded = false
                     launchAgentCamera()
@@ -565,8 +545,23 @@ fun AgentChatScreen(
 
         RecordingVoiceOverlay(
             visible = isRecordingVoice || isTranscribingVoice,
-            target = if (isRecordingVoice) voiceGestureTarget else voiceProcessingTarget,
-            isProcessing = isTranscribingVoice && !isRecordingVoice
+            isProcessing = isTranscribingVoice && !isRecordingVoice,
+            processingTarget = voiceProcessingTarget,
+            onCancel = {
+                if (isRecordingVoice) {
+                    cancelVoiceRecording()
+                }
+            },
+            onEdit = {
+                if (isRecordingVoice) {
+                    stopVoiceRecording(VoiceGestureTarget.Edit)
+                }
+            },
+            onFinish = {
+                if (isRecordingVoice) {
+                    stopVoiceRecording(VoiceGestureTarget.Normal)
+                }
+            }
         )
 
         pendingVoiceTranscript?.let { transcript ->
@@ -1031,27 +1026,16 @@ private fun AgentInputBar(
     onValueChange: (String) -> Unit,
     pendingImageUri: Uri?,
     onRemovePendingImage: () -> Unit,
-    isRecordingVoice: Boolean,
     isReplying: Boolean,
     attachmentsExpanded: Boolean,
     onToggleAttachments: () -> Unit,
     onSend: () -> Unit,
     onStopGenerating: () -> Unit,
     onVoiceStart: () -> Unit,
-    onVoiceFinish: (VoiceGestureTarget) -> Unit,
-    onVoiceCancel: () -> Unit,
-    onVoiceGestureTargetChange: (VoiceGestureTarget) -> Unit,
     onTakePhoto: () -> Unit,
     onChooseImage: () -> Unit
 ) {
     val canSend = value.trim().isNotEmpty() || pendingImageUri != null
-    var textMode by rememberSaveable { mutableStateOf(false) }
-
-    LaunchedEffect(value, pendingImageUri) {
-        if (value.isBlank() && pendingImageUri == null) {
-            textMode = false
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -1086,49 +1070,45 @@ private fun AgentInputBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (textMode || value.isNotEmpty() || pendingImageUri != null) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 42.dp, max = 112.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFFFAF8FE))
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        if (value.isEmpty()) {
-                            Text(
-                                text = "发消息或长按说话",
-                                color = TextHint,
-                                fontSize = 15.sp
-                            )
-                        }
-                        BasicTextField(
-                            value = value,
-                            onValueChange = onValueChange,
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(
-                                color = TextPrimary,
-                                fontSize = 15.sp,
-                                lineHeight = 22.sp
-                            ),
-                            cursorBrush = SolidColor(PurpleStart),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { onSend() }),
-                            minLines = 1,
-                            maxLines = 4
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 42.dp, max = 112.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFFAF8FE))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "发消息",
+                            color = TextHint,
+                            fontSize = 15.sp
                         )
                     }
-                } else {
-                    VoiceHoldField(
-                        enabled = !isReplying,
-                        modifier = Modifier.weight(1f),
-                        onTap = { textMode = true },
-                        onVoiceStart = onVoiceStart,
-                        onVoiceFinish = onVoiceFinish,
-                        onVoiceCancel = onVoiceCancel,
-                        onVoiceTargetChange = onVoiceGestureTargetChange
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = TextStyle(
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            lineHeight = 22.sp
+                        ),
+                        cursorBrush = SolidColor(PurpleStart),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { onSend() }),
+                        minLines = 1,
+                        maxLines = 4
                     )
                 }
+                Spacer(modifier = Modifier.size(8.dp))
+                RoundIconButton(
+                    icon = Icons.Default.Mic,
+                    contentDescription = "语音输入",
+                    backgroundColor = Color(0xFFF8F6FC),
+                    iconColor = PurpleStart,
+                    onClick = onVoiceStart
+                )
                 Spacer(modifier = Modifier.size(8.dp))
                 RoundIconButton(
                     icon = if (attachmentsExpanded) Icons.Default.Close else Icons.Default.Add,
@@ -1170,77 +1150,13 @@ private fun AgentInputBar(
 }
 
 @Composable
-private fun VoiceHoldField(
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    onTap: () -> Unit,
-    onVoiceStart: () -> Unit,
-    onVoiceFinish: (VoiceGestureTarget) -> Unit,
-    onVoiceCancel: () -> Unit,
-    onVoiceTargetChange: (VoiceGestureTarget) -> Unit
-) {
-    Box(
-        modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFFFAF8FE))
-            .border(1.dp, Color(0xFFEDE5F7), RoundedCornerShape(16.dp))
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val releasedBeforeLongPress = withTimeoutOrNull(320) {
-                        waitForUpOrCancellation()
-                    }
-                    if (releasedBeforeLongPress != null) {
-                        onTap()
-                    } else {
-                        onVoiceStart()
-                        var currentTarget = VoiceGestureTarget.Normal
-                        onVoiceTargetChange(currentTarget)
-                        do {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull()
-                            if (change != null) {
-                                val dx = change.position.x - down.position.x
-                                val nextTarget = when {
-                                    dx < -48f -> VoiceGestureTarget.Cancel
-                                    dx > 48f -> VoiceGestureTarget.Edit
-                                    else -> VoiceGestureTarget.Normal
-                                }
-                                if (nextTarget != currentTarget) {
-                                    currentTarget = nextTarget
-                                    onVoiceTargetChange(currentTarget)
-                                }
-                            }
-                            change?.consume()
-                        } while (event.changes.any { it.pressed })
-                        when (currentTarget) {
-                            VoiceGestureTarget.Cancel -> onVoiceCancel()
-                            VoiceGestureTarget.Normal,
-                            VoiceGestureTarget.Edit -> onVoiceFinish(currentTarget)
-                        }
-                        onVoiceTargetChange(VoiceGestureTarget.Normal)
-                    }
-                }
-            }
-            .alpha(if (enabled) 1f else 0.62f),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Text(
-            text = "发消息或长按说话",
-            color = TextHint,
-            fontSize = 15.sp,
-            modifier = Modifier.padding(horizontal = 14.dp)
-        )
-    }
-}
-
-@Composable
 private fun RecordingVoiceOverlay(
     visible: Boolean,
-    target: VoiceGestureTarget,
-    isProcessing: Boolean = false
+    isProcessing: Boolean = false,
+    processingTarget: VoiceGestureTarget = VoiceGestureTarget.Normal,
+    onCancel: () -> Unit,
+    onEdit: () -> Unit,
+    onFinish: () -> Unit
 ) {
     val scale = rememberResponsiveScale()
     AnimatedVisibility(
@@ -1248,35 +1164,16 @@ private fun RecordingVoiceOverlay(
         enter = fadeIn(),
         exit = fadeOut()
     ) {
-        val isCancel = target == VoiceGestureTarget.Cancel
-        val isEdit = target == VoiceGestureTarget.Edit
-        val cancelFill by animateColorAsState(
-            targetValue = if (isCancel) Color(0xFFF8F6FA) else Color(0xA9706978),
-            label = "voiceCancelFill"
-        )
-        val editFill by animateColorAsState(
-            targetValue = if (isEdit) Color(0xFFF8F6FA) else Color(0xA9706978),
-            label = "voiceEditFill"
-        )
-        val cancelShadowAlpha by androidx.compose.animation.core.animateFloatAsState(
-            targetValue = if (isCancel) 0.08f else 0.045f,
-            label = "voiceCancelShadowAlpha"
-        )
-        val editShadowAlpha by androidx.compose.animation.core.animateFloatAsState(
-            targetValue = if (isEdit) 0.08f else 0.045f,
-            label = "voiceEditShadowAlpha"
-        )
+        val isEdit = processingTarget == VoiceGestureTarget.Edit
         val centerText = when {
             isProcessing && isEdit -> "正在转文字"
             isProcessing -> "正在发送"
-            else -> ""
+            else -> "正在聆听"
         }
         val helperText = when {
             isProcessing && isEdit -> "识别完成后进入编辑"
             isProcessing -> "识别完成后发送"
-            isCancel -> "松手 取消"
-            isEdit -> "松手 编辑"
-            else -> "松手 发送"
+            else -> "点击卡片结束并发送"
         }
 
         BoxWithConstraints(
@@ -1304,11 +1201,12 @@ private fun RecordingVoiceOverlay(
                         .clip(RoundedCornerShape(24.dp))
                         .background(Color(0xFFF8F6FA))
                         .border(1.dp, Color.White.copy(alpha = 0.58f), RoundedCornerShape(24.dp))
+                        .clickable(enabled = !isProcessing, onClick = onFinish)
                         .padding(horizontal = 26.dp * scale, vertical = 22.dp * scale),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = centerText.ifBlank { "正在聆听" },
+                        text = centerText,
                         color = TextPrimary,
                         fontSize = (20f * scale).sp,
                         fontWeight = FontWeight.Medium,
@@ -1429,21 +1327,36 @@ private fun RecordingVoiceOverlay(
                     translate(0f, 2.dp.toPx()) {
                         drawPath(
                             cancelSurface,
-                            Color.Black.copy(alpha = cancelShadowAlpha)
+                            Color.Black.copy(alpha = 0.045f)
                         )
                         drawPath(
                             editSurface,
-                            Color.Black.copy(alpha = editShadowAlpha)
+                            Color.Black.copy(alpha = 0.045f)
                         )
                     }
 
-                    drawPath(cancelSurface, cancelFill)
-                    drawPath(editSurface, editFill)
+                    drawPath(cancelSurface, Color(0xA9706978))
+                    drawPath(editSurface, Color(0xA9706978))
+                }
+
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clickable(enabled = !isProcessing, onClick = onCancel)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clickable(enabled = !isProcessing, onClick = onEdit)
+                    )
                 }
 
                 Text(
                     text = "取消",
-                    color = if (isCancel) Color(0xFF211E25) else Color.White,
+                    color = Color.White,
                     fontSize = (18f * scale).sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
@@ -1455,7 +1368,7 @@ private fun RecordingVoiceOverlay(
                 )
                 Text(
                     text = "编辑",
-                    color = if (isEdit) Color(0xFF211E25) else Color.White,
+                    color = Color.White,
                     fontSize = (18f * scale).sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
